@@ -1,0 +1,32 @@
+
+parameters: {}
+
+variables: {
+  "ProjectGroups_Role_CONBoardAdministrators": "CON Board Administrators",
+  "ProjectGroups_Role_CONReaders": "CON Readers",
+  "ProjectGroups_Role_CONContributors": "Contributors",
+  "ProjectGroups_Role_CONBuildAdministrators": "Build Administrators",
+  "ProjectGroups_Role_CONReleaseAdministrators": "CON Release Administrators",
+}
+
+resources:
+
+  - name: CON Readers
+    type: AzureDevOpsDsc/xAzDoProjectGroup
+    dependsOn: 
+      - AzureDevOpsDsc/xAzDoProject/Project
+    properties:
+      ProjectName: $ProjectName
+      GroupName: $ProjectGroups_Role_CONReaders
+      GroupDescription: The following group provides members with read access to the project and codebase.
+
+  - name: CON Board Administrators
+    condition: $Project_Service_WorkBoards -eq 'enabled'
+    type: AzureDevOpsDsc/xAzDoProjectGroup
+    dependsOn: 
+      - AzureDevOpsDsc/xAzDoProject/Project
+    properties:
+      ProjectName: $ProjectName
+      GroupName: $ProjectGroups_Role_CONBoardAdministrators
+      GroupDescription: The following group provides members with administrative access to the project boards.
+

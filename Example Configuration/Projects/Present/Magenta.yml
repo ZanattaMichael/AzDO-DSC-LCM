@@ -1,0 +1,66 @@
+parameters: {}
+
+variables: {
+  ProjectDescription: 'Custom Magenta Project. Contact Name: John Doe.',
+  ProjectRepositoryName: 'CON_Configuration',
+  Project_Service_GitRepositories: 'enabled',
+  Project_Service_BuildPipelines: 'enabled',
+  Project_Service_AzureArtifact: 'enabled'
+}
+
+resources:
+
+- name: Configuration Git Repository
+  type: AzureDevOpsDsc/xAzDoGitRepository
+  dependsOn: 
+    - AzureDevOpsDsc/xAzDoProject/Project
+  properties:
+    ProjectName: $ProjectName
+    RepositoryName: $ProjectRepositoryName
+
+- name: Configuration Git Permissions
+  type: AzureDevOpsDsc/xAzDoGitPermission
+  dependsOn: 
+    - AzureDevOpsDsc/xAzDoGitRepository/Configuration Git Repository
+    - AzureDevOpsDsc/xAzDoProjectGroup/CON Readers
+    - AzureDevOpsDsc/xAzDoProjectGroup/CON Board Administrators
+  properties:
+    ProjectName: $ProjectName
+    RepositoryName: $ProjectRepositoryName
+    isInherited: false
+    Permissions:
+      - Identity: '[$ProjectName]\$ProjectGroups_Role_CONReaders'
+        Permission:
+          Read: "Allow"
+      - Identity: '[$ProjectName]\$ProjectGroups_Role_CONContributors'
+        Permission:
+          Read: "Allow"
+          Contribute: "Allow"
+          CreateBranch: "Allow"
+          PullRequestContribute: "Allow"    
+      - Identity: '[$ProjectName]\$ProjectGroups_Role_CONReleaseAdministrators'
+        Permission:
+          Read: "Allow"
+          CreateTag: "Allow"
+          ManageNote: "Allow"
+          EditPolicies: "Allow"
+          PullRequestContribute: "Allow"
+      - Identity: '[$ProjectName]\$ProjectGroups_Role_CONBuildAdministrators'
+        Permission:
+          Read: "Allow"
+          Contribute: "Allow"
+          CreateTag: "Allow"
+          ManageNote: "Allow"
+          PullRequestContribute: "Allow"
+          EditPolicies: "Allow"     
+      - Identity: '[$Organization_Name]\$Organization_Role_ProjectCollectionAdmins'
+        Permission:
+          Read: "Allow"
+          Contribute: "Allow"
+          CreateBranch: "Allow"
+          CreateTag: "Allow"
+          ManageNote: "Allow"
+          EditPolicies: "Allow"
+          RemoveOthersLocks: "Allow"
+          ManagePermissions: "Allow"
+

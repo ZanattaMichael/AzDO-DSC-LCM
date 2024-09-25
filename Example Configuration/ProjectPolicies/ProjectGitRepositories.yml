@@ -1,0 +1,56 @@
+
+parameters: {}
+
+variables: {
+}
+
+resources:
+
+  - name: Default Git Configuration Permissions
+    type: AzureDevOpsDsc/xAzDoGitPermission
+    dependsOn:
+      - AzureDevOpsDsc/xAzDoProject/Project
+      - AzureDevOpsDsc/xAzDoProjectGroup/CON Readers
+      - AzureDevOpsDsc/xAzDoProjectGroup/CON Board Administrators
+    properties:
+      ProjectName: $ProjectName
+      RepositoryName: $ProjectName
+      isInherited: false
+      Permissions:
+        - Identity: '[$ProjectName]\$ProjectGroups_Role_CONReaders'
+          Permission:
+            Read: "Allow"
+        - Identity: '[$ProjectName]\$ProjectGroups_Role_CONContributors'
+          Permission:
+            Read: "Allow"
+            Contribute: "Allow"
+            CreateBranch: "Allow"
+            PullRequestContribute: "Allow"    
+        - Identity: '[$ProjectName]\$ProjectGroups_Role_CONBuildAdministrators'
+          Permission:
+            Read: "Allow"
+            Contribute: "Allow"
+            CreateTag: "Allow"
+            ManageNote: "Allow"
+            PullRequestContribute: "Allow"
+            EditPolicies: "Allow"   
+        - Identity: '[$ProjectName]\$ProjectGroups_Role_CONReleaseAdministrators'
+          Permission:
+            Read: "Allow"
+            CreateTag: "Allow"
+            ManageNote: "Allow"
+            EditPolicies: "Allow"
+            PullRequestContribute: "Allow"              
+        - Identity: '[$Organization_Name]\$Organization_Role_ProjectCollectionAdmins'
+          Permission:
+            Read: "Allow"
+            Contribute: "Allow"
+            CreateBranch: "Allow"
+            CreateTag: "Allow"
+            ManageNote: "Allow"
+            EditPolicies: "Allow"
+            RemoveOthersLocks: "Allow"
+            ManagePermissions: "Allow"
+
+
+        

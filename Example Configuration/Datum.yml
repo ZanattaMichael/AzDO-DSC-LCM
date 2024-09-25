@@ -1,0 +1,28 @@
+ResolutionPrecedence:
+  - Projects\$($Node.ProjectPresence)\$($Node.Project)
+  - ProjectPolicies\ProjectGitRepositories
+  - ProjectPolicies\ProjectGroups
+  - ProjectPolicies\Project
+  - OrganizationPolicies\OrganizationGroups
+  - OrganizationPolicies\Organization
+
+DatumHandlersThrowOnError: true
+
+default_lookup_options: MostSpecific
+
+DatumHandlers:
+  Datum.InvokeCommand::InvokeCommand:
+    SkipDuringLoad: true
+
+
+lookup_options:
+
+  variables:
+    merge_hash_array: deep
+
+  resources:
+    merge_hash_array: UniqueKeyValTuples
+    merge_options:
+      tuple_keys:
+        - name
+

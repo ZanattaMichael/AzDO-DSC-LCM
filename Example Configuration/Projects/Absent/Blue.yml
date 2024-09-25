@@ -1,0 +1,11 @@
+
+parameters: {}
+
+variables: {
+  ProjectDescription: 'Custom Blue Project. Contact Name: John Doe.',
+  ProjectRepositoryName: 'CON_Configuration',
+  Project_Service_WorkBoards: 'enabled'
+}
+
+#resources: {}
+resources:
