@@ -1,3 +1,5 @@
+# Define the Datum Resolution Precedence and Lookup Options for the Datum Configuration.
+# Lower values in the Datum Resolution Precedence list take precedence over higher values.
 ResolutionPrecedence:
   - Projects\$($Node.ProjectPresence)\$($Node.Project)
   - ProjectPolicies\ProjectGitRepositories
@@ -6,15 +8,24 @@ ResolutionPrecedence:
   - OrganizationPolicies\OrganizationGroups
   - OrganizationPolicies\Organization
 
+# Datum Handlers are used to process Datum values.
 DatumHandlersThrowOnError: true
 
+# Datum Handlers are used to process Datum values.
 default_lookup_options: MostSpecific
 
+# Configuration and LCM Versioning Settings for the Configuration. This ensures that the right version of the LCM is used to apply the configuration.
+LCMConfigSettings:
+  ConfigurationVersion: 0.1
+  AZDOLCMVersion: 0.1
+  DSCResourceVersion: 2.0
+
+# Datum Handlers are used to process Datum values.
 DatumHandlers:
   Datum.InvokeCommand::InvokeCommand:
     SkipDuringLoad: true
 
-
+# Define custom Datum lookup options.
 lookup_options:
 
   variables:

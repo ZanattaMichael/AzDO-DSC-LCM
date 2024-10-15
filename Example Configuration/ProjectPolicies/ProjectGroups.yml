@@ -21,7 +21,7 @@ resources:
       GroupDescription: The following group provides members with read access to the project and codebase.
 
   - name: CON Board Administrators
-    condition: $Project_Service_WorkBoards -eq 'enabled'
+    condition: $ProjectWorkBoardsStatus -eq 'enabled'
     type: AzureDevOpsDsc/xAzDoProjectGroup
     dependsOn: 
       - AzureDevOpsDsc/xAzDoProject/Project

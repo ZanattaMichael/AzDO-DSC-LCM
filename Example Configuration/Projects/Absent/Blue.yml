@@ -7,5 +7,4 @@ variables: {
   Project_Service_WorkBoards: 'enabled'
 }
 
-#resources: {}
-resources:
+resources: {}

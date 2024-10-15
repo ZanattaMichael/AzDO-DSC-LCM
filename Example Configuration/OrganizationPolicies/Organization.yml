@@ -1,7 +1,7 @@
 parameters: {}
 
 variables: {
-   "Organization_Name": "contosotestorganization",
+   "Organization_Name": "akkodistestorg",
    "Organization_Role_ProjectCollectionAdmins": "Project Collection Administrators"
 }
 

@@ -1,0 +1,87 @@
+---
+####################################################
+#          ModuleBuilder Configuration             #
+####################################################
+CopyPaths:
+  - en-US
+  - Modules
+Encoding: UTF8
+VersionedOutputDirectory: true
+
+# '.psm1' Prefix and Suffixes
+Prefix: prefix.ps1
+#Suffix: suffix.ps1
+
+####################################################
+#     Dependent Modules Configuration (Sampler)    #
+####################################################
+NestedModule:
+
+####################################################
+#            Pipeline Configuration                #
+####################################################
+BuildWorkflow:
+  '.':
+    - build
+    - test
+
+  build:
+    - Clean
+    - Build_Module_ModuleBuilder
+    - Copy_LCM_Rules
+
+  pack:
+    - build
+    - package_module_nupkg
+
+  test:
+    - Pester_Tests_Stop_On_Fail
+    - Pester_if_Code_Coverage_Under_Threshold
+
+  publish:
+    - Publish_release_to_GitHub
+    - publish_module_to_gallery
+    - Publish_GitHub_Wiki_Content
+
+####################################################
+#       PESTER  Configuration                      #
+####################################################
+
+Pester:
+  OutputFormat: NUnitXML
+  Script:
+    # Only run on unit test on './build.ps1 -Task test'
+    - ./tests.ps1
+  ExcludeTag:
+  Tag:
+
+ModuleBuildTasks:
+  Sampler:
+    - '*.build.Sampler.ib.tasks'
+
+TaskHeader: |
+  param($Path)
+  ""
+  "=" * 79
+  Write-Build Cyan "`t`t`t$($Task.Name.replace("_"," ").ToUpper())"
+  Write-Build DarkGray  "$(Get-BuildSynopsis $Task)"
+  "-" * 79
+  Write-Build DarkGray "  $Path"
+  Write-Build DarkGray "  $($Task.InvocationInfo.ScriptName):$($Task.InvocationInfo.ScriptLineNumber)"
+  ""
+
+GitHubConfig:
+  GitHubFilesToAdd:
+    - 'CHANGELOG.md'
+  GitHubConfigUserName: dscbot
+  GitHubConfigUserEmail: dsccommunity@outlook.com
+  UpdateChangelogOnPrerelease: false
+
+  Generate_Conceptual_Help:
+    MarkdownCodeRegularExpression:
+      - '\`(.+?)\`' # Match inline code-block
+      - '\\(\\)' # Match escaped backslash
+      - '\[[^\[]+\]\((.+?)\)' # Match markdown URL
+      - '_(.+?)_' # Match Italic (underscore)
+      - '\*\*(.+?)\*\*' # Match bold
+      - '\*(.+?)\*' # Match Italic (asterisk)
