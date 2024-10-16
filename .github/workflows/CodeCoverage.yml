@@ -24,6 +24,10 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
 
+      - name: Download PowerShell Dependencies
+        shell: pwsh
+        run: Install-Module Datum, Datum.InvokeCommand, powershell-yaml, PSDesiredStateConfiguration -Force
+
       - name: Perform a Pester Test to ensure that the .\tests.ps1 script exists
         shell: pwsh
         run: Test-Path .\tests.ps1 | Should -be $true
