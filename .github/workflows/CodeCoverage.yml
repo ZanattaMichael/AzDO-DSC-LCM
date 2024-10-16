@@ -27,8 +27,9 @@ jobs:
       - name: Perform a Pester Test to ensure that the .\tests.ps1 script exists
         shell: pwsh
         run: Test-Path .\tests.ps1 | Should -be $true
+        
       # Runs a set of commands using the runners shell
       - name: Run tests.ps1 - Perform Code Coverage
         shell: pwsh
-        run: . \tests.ps1
+        run: . .\tests.ps1
           
