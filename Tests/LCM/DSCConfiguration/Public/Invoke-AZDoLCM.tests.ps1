@@ -34,6 +34,10 @@ Describe "Invoke-AZDoLCM Function Tests" {
             "$TestDrive\MockPath\"
         }
         Mock -CommandName Test-Path -MockWith { return $true }
+
+        $exportConfigDir = New-MockDirectoryPath
+        $ConfigurationSourcePath = New-MockDirectoryPath
+
     }
 
     Context "Environment Variable Check" {
@@ -49,12 +53,12 @@ Describe "Invoke-AZDoLCM Function Tests" {
 
         It "Should throw an error if AZDODSC_CACHE_DIRECTORY environment variable is not set" {
             Remove-Item Env:AZDODSC_CACHE_DIRECTORY -ErrorAction SilentlyContinue
-            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "c:\mock"} | Should -Throw "*The Environment Variable AZDODSC_CACHE_DIRECTORY is not set. Please set the environment variable before running this script*"
+            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath } | Should -Throw "*The Environment Variable AZDODSC_CACHE_DIRECTORY is not set. Please set the environment variable before running this script*"
         }
 
         It "Should not throw an error if AZDODSC_CACHE_DIRECTORY environment variable is set" {
             $env:AZDODSC_CACHE_DIRECTORY = "SomePath"
-            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "c:\mock"} | Should -Not -Throw
+            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath } | Should -Not -Throw
         } 
     }
 
@@ -80,52 +84,61 @@ Describe "Invoke-AZDoLCM Function Tests" {
         }
 
        It "Should create authentication provider with ManagedIdentity" {
-            Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "c:\mock"
+            Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath
             Assert-MockCalled -CommandName New-AzDoAuthenticationProvider -Exactly 1 -Scope It -ParameterFilter { $useManagedIdentity }
        }
 
        It "Should create authentication provider with PAT" {
             $PAT = Get-MockPATToken
-            Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken $PAT -AuthenticationType "PAT" -PATToken $PAT -Mode "test" -ConfigurationSourcePath "c:\mock"
+            Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken $PAT -AuthenticationType "PAT" -PATToken $PAT -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath
             Assert-MockCalled -CommandName New-AzDoAuthenticationProvider -Exactly 1 -Scope It -ParameterFilter { $PersonalAccessToken -eq $PAT }
        }
 
        It "Should build datum configuration" {
-            Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "c:\mock"
+            Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath
             Assert-MockCalled -CommandName Build-DatumConfiguration -Exactly 1 -Scope It
        }
     }
 
     Context "When testing -ConfigurationSourcePath" {
+
+        BeforeAll {
+            $Env:AZDODSC_CACHE_DIRECTORY = "mocked"
+        }
+
+        AfterAll {
+            $Env:AZDODSC_CACHE_DIRECTORY = $null
+        }
+
         it "should call Clone-Repository with a valid URL" {
             Mock -CommandName 'Clone-Repository' -Verifiable -MockWith {
                 return 'C:\mockPath'
             }
-            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "http://mockGitRepo.com/repo"} | Should -Not -Throw
+            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "http://mockGitRepo.com/repo"} | Should -Not -Throw
             Should -InvokeVerifiable
         }
 
         it "should parse a valid file path if it isn't a valid URL" {
             Mock -CommandName 'Clone-Repository'
             Mock -CommandName 'Test-Path' -ParameterFilter {
-                $path -eq 'C:\mock'
+                $path -eq $exportConfigDir
             } -Verifiable -MockWith { return $true }
 
-            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "c:\mock"} | Should -Not -Throw
+            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath } | Should -Not -Throw
             Should -Invoke 'Clone-Repository' -Exactly 0
             Should -InvokeVerifiable
             Should -Invoke 'Start-LCM' -Exactly 0
 
-        } 
+        }
 
         it "should throw an error if it's neither a valid URL or FilePath" {
 
             Mock -CommandName 'Clone-Repository'
             Mock -CommandName 'Test-Path' -ParameterFilter {
-                $path -eq 'C:\mock'
+                $path -eq $ConfigurationSourcePath
             } -Verifiable -MockWith { return $false }
 
-            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir "C:\Config" -JITToken "abc123" -Mode "test" -ConfigurationSourcePath "c:\mock"} | Should -Throw "*Invalid ConfigurationSourcePath*"
+            { Invoke-AZDoLCM -AzureDevopsOrganizationName "MyOrg" -exportConfigDir $exportConfigDir -JITToken "abc123" -Mode "test" -ConfigurationSourcePath $ConfigurationSourcePath } | Should -Throw "*Invalid ConfigurationSourcePath*"
             Should -Invoke 'Clone-Repository' -Exactly 0
             Should -InvokeVerifiable
             Should -Invoke 'Start-LCM' -Exactly 0            

@@ -8,10 +8,11 @@ Describe 'git Function Tests' {
         . $preParseFilePath
 
         Mock Get-Command {
+            
             return @{
                 Name = 'git'
                 CommandType = 'Application'
-                Definition = 'C:\Program Files\Git\bin\git.exe'
+                Definition = New-MockFilePath 'git.exe'
             }
         }
 

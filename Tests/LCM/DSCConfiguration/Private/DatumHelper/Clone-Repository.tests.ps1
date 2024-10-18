@@ -12,7 +12,7 @@ Describe 'Clone-Repository Function Tests' {
 
    
 
-        Mock New-TemporaryDirectory { return "C:\Temp\Repo" }
+        Mock New-TemporaryDirectory { return (New-MockDirectoryPath) }
         Mock git
 
     }
