@@ -26,7 +26,7 @@ Describe 'DatumConfigurationScriptBlock Function Tests' {
             # Simulate direct execution
             $MyInvocation = [PSCustomObject]@{ MyCommand = [PSCustomObject]@{ Name = 'DatumConfigurationScriptBlock' } }
             
-            { DatumConfigurationScriptBlock -OutputPath "C:\Output" -ConfigurationPath "C:\Configuration" } | Should -Throw  "This function is intended to be used as a script block in a separate thread using the Build-DatumConfiguration function."
+            { DatumConfigurationScriptBlock -OutputPath (New-MockDirectoryPath) -ConfigurationPath (New-MockDirectoryPath) } | Should -Throw  "This function is intended to be used as a script block in a separate thread using the Build-DatumConfiguration function."
 
         }
     }
@@ -35,7 +35,7 @@ Describe 'DatumConfigurationScriptBlock Function Tests' {
 
         It "Should import all necessary modules" {
             # Execute the function in a simulated environment
-            DatumConfigurationScriptBlock -OutputPath "C:\Output" -configurationPath "C:\Configuration" -isTest
+            DatumConfigurationScriptBlock -OutputPath (New-MockDirectoryPath) -configurationPath (New-MockDirectoryPath) -isTest
 
             # Verify that Import-Module was called with expected parameters
             Assert-MockCalled -CommandName Import-Module -Exactly 1 -Scope It -ParameterFilter { 
@@ -50,16 +50,18 @@ Describe 'DatumConfigurationScriptBlock Function Tests' {
     Context "Directory Change Verification" {
 
         It "Should change the current directory to the specified configuration path" {
-            DatumConfigurationScriptBlock -OutputPath "C:\Output" -ConfigurationPath "C:\Configuration" -isTest
 
-            Assert-MockCalled -CommandName Set-Location -Exactly 1 -ParameterFilter { $Path -eq 'C:\Configuration' }
+            $ConfigurationPath = New-MockDirectoryPath
+            DatumConfigurationScriptBlock -OutputPath (New-MockDirectoryPath) -ConfigurationPath $ConfigurationPath -isTest
+
+            Assert-MockCalled -CommandName Set-Location -Exactly 1 -ParameterFilter { $Path -eq $ConfigurationPath }
         }
     }
 
     Context "Datum Structure Creation" {
 
         It "Should create a new Datum structure from the definition file" {
-            DatumConfigurationScriptBlock -OutputPath "C:\Output" -ConfigurationPath "C:\Configuration" -isTest
+            DatumConfigurationScriptBlock -OutputPath (New-MockDirectoryPath) -ConfigurationPath (New-MockDirectoryPath) -isTest
 
             Assert-MockCalled -CommandName New-DatumStructure -Times 1
         }
@@ -68,7 +70,7 @@ Describe 'DatumConfigurationScriptBlock Function Tests' {
     Context "Configuration Testing" {
 
         It "Should test the Datum configuration" {
-            DatumConfigurationScriptBlock -OutputPath "C:\Output" -ConfigurationPath "C:\Configuration" -isTest
+            DatumConfigurationScriptBlock -OutputPath (New-MockDirectoryPath) -ConfigurationPath (New-MockDirectoryPath) -isTest
 
             Assert-MockCalled -CommandName Test-DatumConfiguration -Exactly 1
         }
@@ -89,7 +91,7 @@ Describe 'DatumConfigurationScriptBlock Function Tests' {
                 }
             }
 
-            DatumConfigurationScriptBlock -OutputPath "C:\Output" -ConfigurationPath "C:\Configuration" -isTest
+            DatumConfigurationScriptBlock -OutputPath (New-MockDirectoryPath) -ConfigurationPath (New-MockDirectoryPath) -isTest
 
             Assert-MockCalled -CommandName Resolve-AzDoDatumProject -Exactly 2 -Scope It
         }

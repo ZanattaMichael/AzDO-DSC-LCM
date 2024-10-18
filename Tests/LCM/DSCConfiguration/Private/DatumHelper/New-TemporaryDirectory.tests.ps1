@@ -9,9 +9,10 @@ Describe 'New-TemporaryDirectory Function Tests' {
 
         Mock -CommandName New-Item -MockWith {
             param($ItemType, $Path)
+            $path = New-MockDirectoryPath
             return @{
-                PSPath = "Microsoft.PowerShell.Core\FileSystem::C:\Temp\SomeRandomDir"
-                PSParentPath = "Microsoft.PowerShell.Core\FileSystem::C:\Temp"
+                PSPath = "Microsoft.PowerShell.Core\FileSystem::$(New-MockDirectoryPath)"
+                PSParentPath = "Microsoft.PowerShell.Core\FileSystem::$(New-MockDirectoryPath)"
                 PSChildName = "SomeRandomDir"
                 PSDrive = @{ Name = "C" }
                 PSProvider = @{ Name = "FileSystem" }
@@ -19,8 +20,8 @@ Describe 'New-TemporaryDirectory Function Tests' {
                 BaseName = "SomeRandomDir"
                 Mode = "d----"
                 Name = "SomeRandomDir"
-                FullName = "C:\Temp\SomeRandomDir"
-                Parent = "C:\Temp"
+                FullName = "$path\SomeRandomDir"
+                Parent = $path
             }
         }
 
