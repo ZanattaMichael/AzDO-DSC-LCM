@@ -35,35 +35,38 @@ Describe "Compile-DatumConfiguration Function Tests" -Tag Unit -Skip {
             }
         }
 
+        $OutputPath = New-MockDirectoryPath
+        $ConfigurationPath = New-MockDirectoryPath
 
     }
 
     It "should clear the output directory" {
-        Compile-DatumConfiguration -OutputPath "C:\FakeOutput" -ConfigurationPath "C:\FakeConfig"
+
+        Compile-DatumConfiguration -OutputPath $OutputPath -ConfigurationPath $ConfigurationPath
 
         # Verify that Get-ChildItem was called with the correct parameters
-        Assert-MockCalled -CommandName Get-ChildItem -Exactly 1 -Scope It -ParameterFilter { $_.LiteralPath -eq "C:\FakeOutput" }
+        Assert-MockCalled -CommandName Get-ChildItem -Exactly 1 -Scope It -ParameterFilter { $_.LiteralPath -eq $OutputPath }
         
         # Verify that Remove-Item was called
         Assert-MockCalled -CommandName Remove-Item -AtLeast 0 -Scope It
     }
 
     It "should import necessary modules" {
-        Compile-DatumConfiguration -OutputPath "C:\FakeOutput" -ConfigurationPath "C:\FakeConfig"
+        Compile-DatumConfiguration -OutputPath $OutputPath -ConfigurationPath $ConfigurationPath
 
         # Verify that Import-Module was called for each required module
         Assert-MockCalled -CommandName Import-Module -Exactly 3 -Scope It
     }
 
     It "should create a Datum structure from definition file" {
-        Compile-DatumConfiguration -OutputPath "C:\FakeOutput" -ConfigurationPath "C:\FakeConfig"
+        Compile-DatumConfiguration -OutputPath $OutputPath -ConfigurationPath $ConfigurationPath
 
         # Verify that New-DatumStructure was called
         Assert-MockCalled -CommandName New-DatumStructure -Exactly 1 -Scope It
     }
 
     It "should resolve configurations for each node" {
-        Compile-DatumConfiguration -OutputPath "C:\FakeOutput" -ConfigurationPath "C:\FakeConfig"
+        Compile-DatumConfiguration -OutputPath $OutputPath -ConfigurationPath $ConfigurationPath
 
         # Verify that Resolve-Datum was called multiple times for different properties
         Assert-MockCalled -CommandName Resolve-Datum -AtLeast 4 -Scope It

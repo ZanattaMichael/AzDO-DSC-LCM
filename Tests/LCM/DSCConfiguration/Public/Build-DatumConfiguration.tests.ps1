@@ -86,7 +86,7 @@ Describe "Start-LCM Function Tests" -Tag Unit {
 
         It "Should throw an error if ConfigurationPath does not exist" {
             $outputPath = Join-Path $TestDrive "TestOutput"
-            $invalidPath = "C:\NonExistentPath"
+            $invalidPath = New-MockDirectoryPath
 
             New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
 

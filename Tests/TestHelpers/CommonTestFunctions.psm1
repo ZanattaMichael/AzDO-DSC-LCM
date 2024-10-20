@@ -14,6 +14,30 @@ Function Split-RecurivePath {
     $Path
 }
 
+function New-MockFilePath {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$FileName
+    )
+
+    Join-Path (New-MockDirectoryPath) $FileName
+    
+}
+
+Function New-MockDirectoryPath {
+    param ()
+
+    if ($null -eq $TestDrive) {
+        $tempPath = Join-Path $env:TEMP 'Pester'
+        $TestDrive = Join-Path $env:TEMP $tempPath
+    }
+
+    Join-Path $TestDrive 'Temp'
+
+}
+
+
+
 Function Get-FunctionPath {
     param(
         [string[]]$FileNames
@@ -106,4 +130,4 @@ Function Import-Enums {
     return ($Global:TestPaths | Where-Object { $_.Directory.Name -eq 'Enum' })
 }
 
-Export-ModuleMember -Function Split-RecurivePath, Get-FunctionPath, Find-Functions, Get-ClassFilePath, Import-Enums
+Export-ModuleMember -Function Split-RecurivePath, Get-FunctionPath, Find-Functions, Get-ClassFilePath, Import-Enums, New-MockDirectoryPath, New-MockFilePath
