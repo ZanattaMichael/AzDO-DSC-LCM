@@ -27,9 +27,9 @@ This LCM utilizes Datum from Gael Colas to streamline configuration. For more in
     ```yaml
     - name: CON Board Administrators
       condition: $ProjectWorkBoardsStatus -eq 'enabled'
-      type: AzureDevOpsDsc/xAzDoProjectGroup
+      type: AzureDevOpsDsc/AzDoProjectGroup
       dependsOn:
-        - AzureDevOpsDsc/xAzDoProject/Project
+        - AzureDevOpsDsc/AzDoProject/Project
       properties:
         ProjectName: $ProjectName
         GroupName: $GroupName
@@ -63,7 +63,7 @@ The Local Configuration Manager (LCM) provides a set of features applicable to a
     ```yaml
     - name: CON Board Administrators
       condition: $ProjectWorkBoardsStatus -eq 'enabled'
-      type: AzureDevOpsDsc/xAzDoProjectGroup
+      type: AzureDevOpsDsc/AzDoProjectGroup
     ```
 
 - __postExecutionScript__: This feature triggers a script after the resource has been executed. It can be used to perform additional operations or clean-up tasks following the resource's execution. This is helpful for managing state changes or handling post-execution logic.
@@ -72,7 +72,7 @@ The Local Configuration Manager (LCM) provides a set of features applicable to a
 
     ```yaml
     - name: Project
-      type: AzureDevOpsDsc/xAzDoProject
+      type: AzureDevOpsDsc/AzDoProject
       postExecutionScript: if ($Project_Ensure -eq 'Absent') { Stop-TaskProcessing }
     ```
 
@@ -82,11 +82,11 @@ The Local Configuration Manager (LCM) provides a set of features applicable to a
 
     ```yaml
     - name: Default Git Configuration Permissions
-      type: AzureDevOpsDsc/xAzDoGitPermission
+      type: AzureDevOpsDsc/AzDoGitPermission
       dependsOn:
-        - AzureDevOpsDsc/xAzDoProject/Project
-        - AzureDevOpsDsc/xAzDoProjectGroup/CON Readers
-        - AzureDevOpsDsc/xAzDoProjectGroup/CON Board Administrators
+        - AzureDevOpsDsc/AzDoProject/Project
+        - AzureDevOpsDsc/AzDoProjectGroup/CON Readers
+        - AzureDevOpsDsc/AzDoProjectGroup/CON Board Administrators
     ```
 
 These features collectively enhance the robustness and adaptability of DSC resources managed by the LCM, allowing for more precise and context-sensitive configuration management.
@@ -99,7 +99,7 @@ In the realm of configuration, there are specialized commands designed to modify
 
     ```yaml
     - name: Project
-        type: AzureDevOpsDsc/xAzDoProject
+        type: AzureDevOpsDsc/AzDoProject
         postExecutionScript: if ($Project_Ensure -eq 'Absent') { Stop-TaskProcessing }
     ```
 
