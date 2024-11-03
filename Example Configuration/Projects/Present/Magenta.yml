@@ -11,19 +11,19 @@ variables: {
 resources:
 
 - name: Configuration Git Repository
-  type: AzureDevOpsDsc/xAzDoGitRepository
+  type: AzureDevOpsDsc/AzDoGitRepository
   dependsOn: 
-    - AzureDevOpsDsc/xAzDoProject/Project
+    - AzureDevOpsDsc/AzDoProject/Project
   properties:
     ProjectName: $ProjectName
     RepositoryName: $ProjectRepositoryName
 
 - name: Configuration Git Permissions
-  type: AzureDevOpsDsc/xAzDoGitPermission
+  type: AzureDevOpsDsc/AzDoGitPermission
   dependsOn: 
-    - AzureDevOpsDsc/xAzDoGitRepository/Configuration Git Repository
-    - AzureDevOpsDsc/xAzDoProjectGroup/CON Readers
-    - AzureDevOpsDsc/xAzDoProjectGroup/CON Board Administrators
+    - AzureDevOpsDsc/AzDoGitRepository/Configuration Git Repository
+    - AzureDevOpsDsc/AzDoProjectGroup/CON Readers
+    - AzureDevOpsDsc/AzDoProjectGroup/CON Board Administrators
   properties:
     ProjectName: $ProjectName
     RepositoryName: $ProjectRepositoryName
