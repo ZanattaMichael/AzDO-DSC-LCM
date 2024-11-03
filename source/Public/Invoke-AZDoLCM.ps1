@@ -190,7 +190,7 @@ function Invoke-AZDoLCM {
     postExecutionTask:
 
     - name: Org Group Members
-        type: AzureDevOpsDsc/xAzDoProject
+        type: AzureDevOpsDsc/AzDoProject
         properties:
         projectName: CON_$ProjectName
         projectDescription: $ProjectDescription
