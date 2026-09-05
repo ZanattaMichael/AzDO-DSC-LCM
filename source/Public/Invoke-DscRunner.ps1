@@ -30,6 +30,12 @@ as the 'Path' (and, for Git, 'Url') key.
 .PARAMETER ConfigurationSourcePath
 Convenience: a local directory or git URL. Populates the Source context.
 
+.PARAMETER ConfigurationRevision
+Convenience: the branch, tag, or commit to pin a remote configuration to. Populates the
+Source context's 'Revision' key, which the Git source action passes to Clone-Repository.
+Supplying a full 40-character commit SHA makes the pin exact - the clone's HEAD is verified
+against it. Ignored by source actions that do not clone.
+
 .PARAMETER Connect
 Name of the Connect action (a file under Actions/Connect/). Default: 'None'.
 
@@ -66,6 +72,11 @@ Optional resource version hint used to bias 'Auto' engine selection by major ver
 .PARAMETER EngineAction
 Inline engine scriptblock. Takes precedence over -Engine.
 
+.PARAMETER KeepTemporaryDirectory
+Leave any temporary directory the runner created (a clone, or a fallback cache directory)
+on disk after the run instead of deleting it. Useful when debugging a compile failure.
+Directories supplied by the caller are never deleted, with or without this switch.
+
 .EXAMPLE
 Invoke-DscRunner -ConfigurationSourcePath 'C:\config' -Mode Test
 Runs against a local directory with no authentication (Source: Local, Connect: None).
@@ -87,6 +98,7 @@ function Invoke-DscRunner {
         [hashtable]$SourceContext = @{},
 
         [string]$ConfigurationSourcePath,
+        [string]$ConfigurationRevision,
 
         [string]$Connect = 'None',
         [scriptblock]$ConnectAction,
@@ -105,7 +117,9 @@ function Invoke-DscRunner {
         [string]$EngineVersion,
         [scriptblock]$EngineAction,
 
-        [switch]$FailOnError
+        [switch]$FailOnError,
+
+        [switch]$KeepTemporaryDirectory
     )
 
     $ErrorActionPreference = 'Stop'
@@ -117,78 +131,105 @@ function Invoke-DscRunner {
         if (-not $SourceContext.ContainsKey('Url'))  { $SourceContext['Url']  = $ConfigurationSourcePath }
     }
 
-    #
-    # 1. Source — resolve the configuration to a local directory.
-    $configurationDirectory = Invoke-Action -Hook Source -Name $Source -ScriptBlock $SourceAction -Context $SourceContext
-    if ([string]::IsNullOrWhiteSpace($configurationDirectory)) {
-        throw "[Invoke-DscRunner] The Source action returned no configuration directory."
+    # Revision pinning (#31): the Git source action reads 'Revision' and hands it to
+    # Clone-Repository, which checks it out and verifies a full SHA against the clone's HEAD.
+    if (-not [string]::IsNullOrWhiteSpace($ConfigurationRevision)) {
+        if (-not $SourceContext.ContainsKey('Revision')) { $SourceContext['Revision'] = $ConfigurationRevision }
     }
-    Write-Verbose "[Invoke-DscRunner] Configuration directory: $configurationDirectory"
 
-    #
-    # 1b. Engine selection. An inline -EngineAction or an explicit -Engine always wins.
-    # Otherwise the configuration decides: PipelineRunnerSettings.Engine names the engine,
-    # and failing that the back-compat DSCResourceVersion major maps through Resolve-DscEngine
-    # (2.x -> DscV2, 3.x -> DscV3, otherwise dsc.exe auto-detection). This keeps the version
-    # gate out of the core loop while honouring the field configs already carry.
-    if (-not $EngineAction -and -not $PSBoundParameters.ContainsKey('Engine')) {
-        $settings = Get-PipelineRunnerSetting -ConfigurationDirectory $configurationDirectory
-        if ($settings) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$settings['Engine'])) {
-                $Engine = [string]$settings['Engine']
-                Write-Verbose "[Invoke-DscRunner] Engine from PipelineRunnerSettings.Engine: $Engine"
-            }
-            elseif (-not [string]::IsNullOrWhiteSpace([string]$settings['DSCResourceVersion'])) {
-                $Engine = Resolve-DscEngine -Engine 'Auto' -Version ([string]$settings['DSCResourceVersion'])
-                Write-Verbose "[Invoke-DscRunner] Engine auto-selected from DSCResourceVersion '$($settings['DSCResourceVersion'])': $Engine"
+    # Everything from the source resolve onwards runs inside a try/finally so that any
+    # directory the runner created for this run (a clone, or the fallback cache directory)
+    # is removed even when the run throws (#32). Caller-owned directories are never touched:
+    # Remove-RunnerTemporaryDirectory only deletes paths New-TemporaryDirectory registered.
+    $configurationDirectory = $null
+    $resolvedCacheDirectory = $null
+
+    try {
+
+        #
+        # 1. Source — resolve the configuration to a local directory.
+        $configurationDirectory = Invoke-Action -Hook Source -Name $Source -ScriptBlock $SourceAction -Context $SourceContext
+        if ([string]::IsNullOrWhiteSpace($configurationDirectory)) {
+            throw "[Invoke-DscRunner] The Source action returned no configuration directory."
+        }
+        Write-Verbose "[Invoke-DscRunner] Configuration directory: $configurationDirectory"
+
+        #
+        # 1b. Engine selection. An inline -EngineAction or an explicit -Engine always wins.
+        # Otherwise the configuration decides: PipelineRunnerSettings.Engine names the engine,
+        # and failing that the back-compat DSCResourceVersion major maps through Resolve-DscEngine
+        # (2.x -> DscV2, 3.x -> DscV3, otherwise dsc.exe auto-detection). This keeps the version
+        # gate out of the core loop while honouring the field configs already carry.
+        if (-not $EngineAction -and -not $PSBoundParameters.ContainsKey('Engine')) {
+            $settings = Get-PipelineRunnerSetting -ConfigurationDirectory $configurationDirectory
+            if ($settings) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$settings['Engine'])) {
+                    $Engine = [string]$settings['Engine']
+                    Write-Verbose "[Invoke-DscRunner] Engine from PipelineRunnerSettings.Engine: $Engine"
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace([string]$settings['DSCResourceVersion'])) {
+                    $Engine = Resolve-DscEngine -Engine 'Auto' -Version ([string]$settings['DSCResourceVersion'])
+                    Write-Verbose "[Invoke-DscRunner] Engine auto-selected from DSCResourceVersion '$($settings['DSCResourceVersion'])': $Engine"
+                }
             }
         }
+
+        #
+        # 2. Connect — establish any required auth/session (default: None).
+        $null = Invoke-Action -Hook Connect -Name $Connect -ScriptBlock $ConnectAction -Context $ConnectContext
+
+        #
+        # 3. Determine the compile/cache directory. An explicit -CacheDirectory wins, then the
+        # generic PIPELINERUNNER_CACHE_DIRECTORY (with AZDODSC_CACHE_DIRECTORY kept as a
+        # back-compat alias), and finally a fresh temporary directory — no env var is required.
+        # Resolve into a local: the -CacheDirectory parameter carries a ValidateScript that
+        # re-fires on every assignment, so writing an unresolved ($null) value back to it would
+        # throw before the temp-dir fallback ever runs.
+        $resolvedCacheDirectory = Resolve-CacheDirectory -CacheDirectory $CacheDirectory
+        if ([string]::IsNullOrWhiteSpace($resolvedCacheDirectory)) {
+            $resolvedCacheDirectory = New-TemporaryDirectory
+            Write-Verbose "[Invoke-DscRunner] Using temporary cache directory: $resolvedCacheDirectory"
+        }
+        else {
+            Write-Verbose "[Invoke-DscRunner] Using cache directory: $resolvedCacheDirectory"
+        }
+
+        #
+        # 4. Compile Datum and run the core loop over each compiled configuration file.
+        # The resolved cache directory is the trusted scratch root; pass it as -AllowedRoot so the
+        # compile step's path-traversal guard (#33) permits it while still rejecting an escaping path.
+        # A Git source resolves the configuration from a remote clone, so flag it for the compile
+        # step's trust-boundary warning (#27). Inline/custom Source actions that fetch remotely are
+        # opaque here; the SECURITY.md trust model documents the requirement for those.
+        $sourceIsRemote = ($Source -eq 'Git') -or ($SourceContext.ContainsKey('Url') -and -not [string]::IsNullOrWhiteSpace([string]$SourceContext['Url']) -and ([string]$SourceContext['Url'] -match '^(http|https|git|ssh):'))
+        Build-DatumConfiguration -OutputPath $resolvedCacheDirectory -ConfigurationPath $configurationDirectory -AllowedRoot $resolvedCacheDirectory -SourceIsRemote:$sourceIsRemote
+
+        $params = @{ Mode = $Mode; Engine = $Engine }
+        if ($ReportPath)    { $params.ReportPath    = $ReportPath }
+        if ($EngineVersion) { $params.EngineVersion = $EngineVersion }
+        if ($EngineAction)  { $params.EngineAction  = $EngineAction }
+
+        # Collect each configuration's structured result so the run can be summarized as a single
+        # machine-readable object and, with -FailOnError, surface a non-zero exit code (#19).
+        $runResults = Get-ChildItem -LiteralPath $resolvedCacheDirectory -File -Filter '*.yml' | ForEach-Object {
+            Start-DscRunner -FilePath $_.FullName @params
+        }
+
+        $summaryArgs = @{ Result = $runResults }
+        if ($ReportPath)  { $summaryArgs.ReportPath  = $ReportPath }
+        if ($FailOnError) { $summaryArgs.FailOnError = $true }
+
+        return Merge-DscRunnerResult @summaryArgs
+
     }
-
-    #
-    # 2. Connect — establish any required auth/session (default: None).
-    $null = Invoke-Action -Hook Connect -Name $Connect -ScriptBlock $ConnectAction -Context $ConnectContext
-
-    #
-    # 3. Determine the compile/cache directory. An explicit -CacheDirectory wins, then the
-    # generic PIPELINERUNNER_CACHE_DIRECTORY (with AZDODSC_CACHE_DIRECTORY kept as a
-    # back-compat alias), and finally a fresh temporary directory — no env var is required.
-    # Resolve into a local: the -CacheDirectory parameter carries a ValidateScript that
-    # re-fires on every assignment, so writing an unresolved ($null) value back to it would
-    # throw before the temp-dir fallback ever runs.
-    $resolvedCacheDirectory = Resolve-CacheDirectory -CacheDirectory $CacheDirectory
-    if ([string]::IsNullOrWhiteSpace($resolvedCacheDirectory)) {
-        $resolvedCacheDirectory = (New-TemporaryDirectory).Path
-        Write-Verbose "[Invoke-DscRunner] Using temporary cache directory: $resolvedCacheDirectory"
+    finally {
+        if ($KeepTemporaryDirectory) {
+            Write-Verbose "[Invoke-DscRunner] -KeepTemporaryDirectory was supplied; leaving any temporary directories in place."
+        }
+        else {
+            # No-ops for a caller-supplied path; deletes only what the runner created.
+            Remove-RunnerTemporaryDirectory -Path $configurationDirectory
+            Remove-RunnerTemporaryDirectory -Path $resolvedCacheDirectory
+        }
     }
-    else {
-        Write-Verbose "[Invoke-DscRunner] Using cache directory: $resolvedCacheDirectory"
-    }
-
-    #
-    # 4. Compile Datum and run the core loop over each compiled configuration file.
-    # The resolved cache directory is the trusted scratch root; pass it as -AllowedRoot so the
-    # compile step's path-traversal guard (#33) permits it while still rejecting an escaping path.
-    # A Git source resolves the configuration from a remote clone, so flag it for the compile
-    # step's trust-boundary warning (#27). Inline/custom Source actions that fetch remotely are
-    # opaque here; the SECURITY.md trust model documents the requirement for those.
-    $sourceIsRemote = ($Source -eq 'Git') -or ($SourceContext.ContainsKey('Url') -and -not [string]::IsNullOrWhiteSpace([string]$SourceContext['Url']) -and ([string]$SourceContext['Url'] -match '^(http|https|git|ssh):'))
-    Build-DatumConfiguration -OutputPath $resolvedCacheDirectory -ConfigurationPath $configurationDirectory -AllowedRoot $resolvedCacheDirectory -SourceIsRemote:$sourceIsRemote
-
-    $params = @{ Mode = $Mode; Engine = $Engine }
-    if ($ReportPath)    { $params.ReportPath    = $ReportPath }
-    if ($EngineVersion) { $params.EngineVersion = $EngineVersion }
-    if ($EngineAction)  { $params.EngineAction  = $EngineAction }
-
-    # Collect each configuration's structured result so the run can be summarized as a single
-    # machine-readable object and, with -FailOnError, surface a non-zero exit code (#19).
-    $runResults = Get-ChildItem -LiteralPath $resolvedCacheDirectory -File -Filter '*.yml' | ForEach-Object {
-        Start-DscRunner -FilePath $_.FullName @params
-    }
-
-    $summaryArgs = @{ Result = $runResults }
-    if ($ReportPath)  { $summaryArgs.ReportPath  = $ReportPath }
-    if ($FailOnError) { $summaryArgs.FailOnError = $true }
-
-    return Merge-DscRunnerResult @summaryArgs
 }
