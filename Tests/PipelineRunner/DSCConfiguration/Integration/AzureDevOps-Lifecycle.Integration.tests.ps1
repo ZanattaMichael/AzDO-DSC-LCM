@@ -66,6 +66,11 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
         . (Get-FunctionPath 'ConvertTo-CaseInsensitiveHashtable.ps1').FullName
         . (Get-FunctionPath 'Expand-HashTable.ps1').FullName
         . (Get-FunctionPath 'Expand-StringInArray.ps1').FullName
+        # Resource properties now resolve <params=Name> tokens before string interpolation,
+        # so the parameter-expansion chain is loaded alongside Expand-HashTable (#5).
+        . (Get-FunctionPath 'Expand-Parameters.ps1').FullName
+        . (Get-FunctionPath 'Expand-ParameterInArray.ps1').FullName
+        . (Get-FunctionPath 'Resolve-PipelineParameter.ps1').FullName
         . (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
         . (Get-FunctionPath 'Stop-TaskProcessing.ps1').FullName
 
