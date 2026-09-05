@@ -90,10 +90,7 @@
     # NestedModules = @()
 
     # Functions to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no functions to export.
-    FunctionsToExport = @()
-
-    # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
-    CmdletsToExport = @(
+    FunctionsToExport = @(
         'Build-DatumConfiguration'
         'ConvertTo-DscV3ConfigurationDocument'
         'Invoke-DscPipelineRunner'
@@ -103,8 +100,15 @@
         'Test-DatumConfiguration'
     )
 
-    # Variables to export from this module
-    VariablesToExport = '*'
+    # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
+    # This module ships no binary cmdlets; the seven public commands above are advanced
+    # functions and were previously listed here, which is why none of them was exported.
+    CmdletsToExport = @()
+
+    # Variables to export from this module. '*' exported the module's internal state
+    # ($references, $variables, $parameters from prefix.ps1) into the caller's session,
+    # where anything could overwrite it mid-run.
+    VariablesToExport = @()
 
     # Aliases to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no aliases to export.
     AliasesToExport = @()
@@ -135,7 +139,7 @@
             ProjectUri   = 'https://github.com/ZanattaMichael/Dsc.PipelineRunner'
 
             # A URL to an icon representing this module.
-            IconUri      = 'https://github.com/ZanattaMichael/Dsc.PipelineRunner/blob/main/icon.png'
+            IconUri      = 'https://raw.githubusercontent.com/ZanattaMichael/Dsc.PipelineRunner/main/icon.png'
 
             # ReleaseNotes of this module
             ReleaseNotes = ''
