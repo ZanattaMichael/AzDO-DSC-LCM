@@ -10,6 +10,11 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         $InvokePreParseRulesPath = (Get-FunctionPath 'Invoke-PreParseRules.ps1').FullName
         $InvokeFormatTasksPath = (Get-FunctionPath 'Invoke-FormatTasks.ps1').FullName
         $InvokeExpandHashTablePath = (Get-FunctionPath 'Expand-HashTable.ps1').FullName
+        # Resource properties now resolve <params=Name> tokens before string interpolation,
+        # so the parameter-expansion chain is loaded alongside Expand-HashTable (#5).
+        $InvokeExpandParametersPath = (Get-FunctionPath 'Expand-Parameters.ps1').FullName
+        $InvokeExpandParameterInArrayPath = (Get-FunctionPath 'Expand-ParameterInArray.ps1').FullName
+        $ResolvePipelineParameterPath = (Get-FunctionPath 'Resolve-PipelineParameter.ps1').FullName
         $StopTaskProcessingPath = (Get-FunctionPath 'Stop-TaskProcessing.ps1').FullName
         # #35: conditions are validated as side-effect-free predicates before they run.
         $AssertSafeConditionPath = (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
@@ -29,6 +34,9 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         . $InvokePreParseRulesPath
         . $InvokeFormatTasksPath
         . $InvokeExpandHashTablePath
+        . $InvokeExpandParametersPath
+        . $InvokeExpandParameterInArrayPath
+        . $ResolvePipelineParameterPath
         . $StopTaskProcessingPath
         . $AssertSafeConditionPath
 
@@ -477,6 +485,90 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
 
             Assert-MockCalled -CommandName Export-Csv -Exactly 0
             Assert-MockCalled -CommandName Set-Content -Exactly 0
+        }
+    }
+
+    Context "parameter token expansion (#5)" {
+
+        BeforeEach {
+            # A configuration that declares a parameter and references it from a resource
+            # property with the <params=Name> token. Expand-Parameters had no production
+            # caller at all, so the token used to reach the engine verbatim.
+            Mock -CommandName Get-Content -MockWith { return '{}' }
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                return @{
+                    parameters = @{
+                        ServiceName = @{ defaultValue = 'Spooler' }
+                        RetryCount  = @{ defaultValue = 3 }
+                    }
+                    variables = @{}
+                    resources = @(
+                        @{
+                            type = "Module/Resource"
+                            name = "Resource1"
+                            properties = @{
+                                Name    = '<params=ServiceName>'
+                                Retries = '<params=RetryCount>'
+                                Literal = 'unchanged'
+                            }
+                        }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                return @{ InDesiredState = $true; Message = "Mocked message" }
+            }
+        }
+
+        It "should resolve a params token before the property reaches the engine" {
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            Should -Invoke -CommandName Invoke-DscResource -Scope It -ParameterFilter {
+                $Method -eq 'Test' -and $Property.Name -eq 'Spooler'
+            }
+        }
+
+        It "should preserve the parameter's type rather than stringifying it" {
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            Should -Invoke -CommandName Invoke-DscResource -Scope It -ParameterFilter {
+                $Method -eq 'Test' -and $Property.Retries -is [int] -and $Property.Retries -eq 3
+            }
+        }
+
+        It "should leave a property with no token untouched" {
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            Should -Invoke -CommandName Invoke-DscResource -Scope It -ParameterFilter {
+                $Method -eq 'Test' -and $Property.Literal -eq 'unchanged'
+            }
+        }
+
+        It "should throw when a property references an undefined parameter" {
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                return @{
+                    parameters = @{}
+                    variables = @{}
+                    resources = @(
+                        @{
+                            type = "Module/Resource"
+                            name = "Resource1"
+                            properties = @{ Name = '<params=NotDeclared>' }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath -ErrorAction SilentlyContinue
+
+            # A single unresolvable property is that resource's failure, not the run's: the
+            # remaining tasks still run and the record says which resource failed.
+            $result.FailCount | Should -Be 1
+            $result.Status | Should -Be 'Completed'
+            ($result.Results | Where-Object { $_.Status -eq 'FAIL' }).ErrorMessage |
+                Should -Match "'NotDeclared'"
         }
     }
 

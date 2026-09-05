@@ -33,14 +33,10 @@ function Expand-ParameterInArray {
         }       
         elseif (($item -is [string]) -and ($item -match '^\<params\=(?<name>.+)\>$')) {
 
-            # If the parameter is not found, throw an error
-            $propertyName = $Matches['name']
-            if ([String]::IsNullOrEmpty($Script:parameters."$propertyName")) {
-                throw "[Expand-Parameters] Parameter '$propertyName' not found in the parameters hashtable."
-            }
-
-            # Substitute the parameter with the parameter value
-            $expandedArray += $Script:parameters."$propertyName"
+            # Substitute the parameter with the parameter value. Presence is a key lookup, so
+            # a parameter defined as an empty string resolves rather than being reported
+            # missing (see Resolve-PipelineParameter).
+            $expandedArray += Resolve-PipelineParameter -Name $Matches['name']
         }
         elseif ($item -is [hashtable]) {
             $expandedArray += Expand-Parameters -InputHashTable $item

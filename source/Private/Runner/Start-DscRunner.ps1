@@ -280,12 +280,28 @@ function Start-DscRunner {
             $resourceType = $task.type.Split("/")[1]
             Write-Verbose "Extracted module name: $module and resource type: $resourceType"
 
-            # Replace any variables in the properties with their actual values
-            $Property = Expand-HashTable -InputHashTable $task.properties
-            Write-Verbose "Replaced variables in properties with actual values"
-
             $resourceStatus = 'OK'
             $resourceError = $null
+
+            # Resolve the properties in two passes. Expand-Parameters runs first and does
+            # whole-scalar substitution of `<params=Name>` tokens, so a parameter keeps its
+            # type (a number stays a number, a hashtable stays a hashtable). Expand-HashTable
+            # then runs string interpolation over the result, so a parameter value that
+            # itself contains $(...) or a $variable reference still expands.
+            #
+            # An unresolvable token is this resource's failure, not the run's: expansion is
+            # inside the same guard as the engine call so one bad property does not abort the
+            # remaining tasks.
+            try {
+                $Property = Expand-HashTable -InputHashTable (Expand-Parameters -InputHashTable $task.properties)
+                Write-Verbose "Replaced parameters and variables in properties with actual values"
+            }
+            catch {
+                Write-Error "[Start-DscRunner] Could not resolve the properties of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
+                & $recordResult $task.type $task.name 'FAIL' $resourceStopwatch.ElapsedMilliseconds $_.Exception.Message
+                Write-Information ("[{0}/{1}] FAIL {2} ({3}ms) - {4}" -f $TaskCounter, $totalTasks, $resourceKey, $resourceStopwatch.ElapsedMilliseconds, $_.Exception.Message) -Tags $infoTag
+                continue
+            }
 
             # Execute the 'Test' method to determine if the state is as desired.
             # The resource is evaluated through the selected engine (DscV2 / DscV3 / custom),

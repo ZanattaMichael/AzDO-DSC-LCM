@@ -6,13 +6,17 @@ Describe "Expand-ParameterInArray Function Tests" -Tag Unit, Runner, Configurati
         $preParseFilePath = (Get-FunctionPath 'Expand-ParameterInArray.ps1').FullName
         $expandParametersFilePath = (Get-FunctionPath 'Expand-Parameters.ps1').FullName
 
+        $resolveParameterFilePath = (Get-FunctionPath 'Resolve-PipelineParameter.ps1').FullName
+
         . $preParseFilePath
         . $expandParametersFilePath
+        . $resolveParameterFilePath
 
         # Define the script-scoped parameters hashtable
         $Script:parameters = @{
             example = 'ExpandedValue'
             anotherExample = 'AnotherExpandedValue'
+            emptyExample = ''
         }
 
     }
@@ -64,6 +68,21 @@ Describe "Expand-ParameterInArray Function Tests" -Tag Unit, Runner, Configurati
             $result[2].key | Should -Be 'value'
             $result[3] | Should -Be 'RegularString'
 
+        }
+    }
+
+    Context "Parameter presence" {
+
+        It "should resolve a parameter whose value is an empty string" {
+            $result = Expand-ParameterInArray -InputArray @('<params=emptyExample>', 'After')
+
+            $result[0] | Should -Be ''
+            $result[1] | Should -Be 'After'
+        }
+
+        It "should name the missing parameter in the error" {
+            { Expand-ParameterInArray -InputArray @('<params=nonExistent>') } |
+                Should -Throw "*'nonExistent'*"
         }
     }
 }

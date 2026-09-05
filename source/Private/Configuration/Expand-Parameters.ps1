@@ -15,7 +15,7 @@
 
  .NOTES
  This function is part of the Dsc.PipelineRunner module and is intended for internal use.
- It relies on other functions such as Expand-HashTable and Expand-ParameterInArray.
+ It relies on other functions such as Expand-ParameterInArray and Resolve-PipelineParameter.
  If a placeholder parameter is not found in the parameters hashtable, an error is thrown.
 #>
 
@@ -30,28 +30,33 @@ Function Expand-Parameters {
 
     # Iterate through each key in the hashtable
     foreach ($key in $InputHashTable.Keys) {
-            
-        if ($InputHashTable[$key] -is [hashtable]) {
+
+        if ($null -eq $InputHashTable[$key]) {
+            # Preserve nulls rather than calling .GetType() on them (which throws)
+            $inputValue = $null
+        }
+        elseif ($InputHashTable[$key] -is [bool]) {
+            # Keep the boolean value as is; -match would coerce it to the string 'True'
+            $inputValue = $InputHashTable[$key]
+        }
+        elseif ($InputHashTable[$key] -is [hashtable]) {
             # Recursively expand the hashtable
             $inputValue = Expand-Parameters -InputHashTable $InputHashTable[$key]
         }
         elseif ($InputHashTable[$key].GetType().Name -eq 'List`1') {
-            # Expand the string in the list
-            $inputValue = Expand-ParameterInArray $task.properties[$key]
+            # Expand the parameters in the list, reading from this hashtable rather than the
+            # caller's $task - the caller-scope read meant a nested hashtable was expanded
+            # against the wrong values, or against nothing at all outside the runner.
+            $inputValue = Expand-ParameterInArray $InputHashTable[$key]
         }
         elseif (($InputHashTable[$key] -is [array]) -and ($InputHashTable[$key].Count -ne 1)) {
             # If the value is a string, expand the parameter
             $inputValue = Expand-ParameterInArray $InputHashTable[$key]
         }
         elseif ($InputHashTable[$key] -match '^\<params\=(?<name>.+)\>$') {
-            # If the parameter is not found, throw an error
-            $propertyName = $Matches['name']
-            if ([String]::IsNullOrEmpty($Script:parameters."$propertyName")) {
-                throw "[Expand-Parameters] Parameter '$propertyName' not found in the parameters hashtable."
-            }
-            # Replace the Properties with the value
-            $inputValue = $Script:parameters."$propertyName"
-
+            # Whole-scalar substitution: the value is exactly one parameter token, so it is
+            # replaced by the parameter's value with its type intact.
+            $inputValue = Resolve-PipelineParameter -Name $Matches['name']
         } else {
             # If the value is a string, expand the parameter
             $inputValue = $InputHashTable[$key]
