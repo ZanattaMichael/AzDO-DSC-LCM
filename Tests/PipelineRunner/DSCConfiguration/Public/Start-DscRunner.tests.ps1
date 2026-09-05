@@ -143,6 +143,21 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         Mock -CommandName Export-Csv
         Mock -CommandName Set-Content
 
+        # Start-DscRunner now rejects a path that does not exist (#15), so the suite works
+        # against real (empty) files on the test drive and lets the mocked Get-Content
+        # supply the content. The names keep the original .json/.yaml extensions so the
+        # loader branch under test is unchanged.
+        $script:testJsonPath = Join-Path $TestDrive 'test.json'
+        $script:testYamlPath = Join-Path $TestDrive 'test.yaml'
+        $script:testTextPath = Join-Path $TestDrive 'test.txt'
+        foreach ($fixture in $script:testJsonPath, $script:testYamlPath, $script:testTextPath) {
+            Set-Content -LiteralPath $fixture -Value 'placeholder' -ErrorAction SilentlyContinue
+            if (-not (Test-Path -LiteralPath $fixture)) {
+                # Set-Content is mocked above; fall back to the .NET API for the fixtures.
+                [System.IO.File]::WriteAllText($fixture, 'placeholder')
+            }
+        }
+
     }
 
     BeforeEach {
@@ -154,18 +169,18 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
 
         It "should correctly load YAML configuration" {
             Mock -CommandName Get-Content -MockWith { "---\nparameters: {}\nvariables: {}\nresources: []" }
-            Start-DscRunner -FilePath "test.yaml"
+            Start-DscRunner -FilePath $script:testYamlPath
             Assert-MockCalled -CommandName ConvertFrom-Yaml -Exactly 1
         }
 
         It "should correctly load JSON configuration" {
             Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
-            Start-DscRunner -FilePath "test.json"
+            Start-DscRunner -FilePath $script:testJsonPath
             Assert-MockCalled -CommandName ConvertFrom-Json -Exactly 1
         }
 
         It "should throw error for unsupported file extension" {
-            { Start-DscRunner -FilePath "test.txt" } | Should -Throw
+            { Start-DscRunner -FilePath $script:testTextPath } | Should -Throw
         }
     }
 
@@ -176,12 +191,12 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         }
 
         It "should never call Write-Host" {
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
             Assert-MockCalled -CommandName Write-Host -Exactly 0
         }
 
         It "should emit informational output tagged 'Dsc.PipelineRunner'" {
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
             Assert-MockCalled -CommandName Write-Information -ParameterFilter { $Tags -contains 'Dsc.PipelineRunner' } -Times 1
         }
     }
@@ -191,11 +206,11 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         It "should return a structured result object describing the run" {
             Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
 
-            $result = Start-DscRunner -FilePath "test.json"
+            $result = Start-DscRunner -FilePath $script:testJsonPath
 
             $result | Should -Not -BeNullOrEmpty
             $result.Status | Should -Be 'Completed'
-            $result.ConfigurationFile | Should -Be 'test.json'
+            $result.ConfigurationFile | Should -Be $script:testJsonPath
             $result.PSObject.Properties.Name | Should -Contain 'PassCount'
             $result.PSObject.Properties.Name | Should -Contain 'FailCount'
             $result.PSObject.Properties.Name | Should -Contain 'SkipCount'
@@ -208,7 +223,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 [PSCustomObject]@{ InDesiredState = $true; Message = "Tested successfully." }
             }
 
-            $result = Start-DscRunner -FilePath "test.json"
+            $result = Start-DscRunner -FilePath $script:testJsonPath
 
             $result.PassCount | Should -Be 1
             $result.FailCount | Should -Be 0
@@ -221,7 +236,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 [PSCustomObject]@{ InDesiredState = $false; Message = "Not in desired state." }
             }
 
-            $result = Start-DscRunner -FilePath "test.json"
+            $result = Start-DscRunner -FilePath $script:testJsonPath
 
             $result.FailCount | Should -Be 1
             $result.FailedResources.Count | Should -Be 1
@@ -240,7 +255,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 [PSCustomObject]@{ InDesiredState = $true; Message = "Tested successfully." }
             }
 
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
 
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq "Test" } -Exactly 1
         }
@@ -250,7 +265,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 [PSCustomObject]@{ InDesiredState = $false; Message = "Not in desired state." }
             }
 
-            Start-DscRunner -FilePath "test.json" -Mode "Set" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath -Mode "Set" | Out-Null
 
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq "Test" } -Exactly 1
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq "Set" } -Exactly 1
@@ -287,7 +302,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 }
             }
 
-            $result = Start-DscRunner -FilePath "test.json"
+            $result = Start-DscRunner -FilePath $script:testJsonPath
 
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq "Test" } -Exactly 1
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq "Get" } -Exactly 1
@@ -328,7 +343,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 }
             }
 
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
 
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Property.prop1 -eq "value1" } -Exactly 0
             Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Property.prop2 -eq "value2" } -Exactly 2
@@ -367,7 +382,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 }
             }
 
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
 
             $parameters['environmentName'] | Should -Be 'Production'
             $parameters['retryCount'] | Should -Be 3
@@ -398,7 +413,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 }
             }
 
-            $result = Start-DscRunner -FilePath "test.json"
+            $result = Start-DscRunner -FilePath $script:testJsonPath
 
             $result.Status | Should -Be 'AbortedByException'
             $result.ErrorMessage | Should -Match 'side-effect-free predicate'
@@ -436,7 +451,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 }
             }
 
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
 
             # The call operator keeps $Mode local to the script block, so the run stays in Test
             # mode throughout and no Set is invoked.
@@ -451,17 +466,70 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         }
 
         It "should generate a CSV and a JSON report if ReportPath is specified" {
-            Start-DscRunner -FilePath "test.json" -ReportPath "C:\Reports" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath -ReportPath "C:\Reports" | Out-Null
 
             Assert-MockCalled -CommandName Export-Csv -Exactly 1
             Assert-MockCalled -CommandName Set-Content -Exactly 1
         }
 
         It "should not generate a report if ReportPath is not specified" {
-            Start-DscRunner -FilePath "test.json" | Out-Null
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
 
             Assert-MockCalled -CommandName Export-Csv -Exactly 0
             Assert-MockCalled -CommandName Set-Content -Exactly 0
+        }
+    }
+
+    Context "configuration file validation (#15)" {
+
+        It "should throw a FileNotFoundException when the configuration file does not exist" {
+            # A missing file used to be swallowed: Get-Content raised a non-terminating error,
+            # $pipeline stayed $null and the run reported 'Completed' with zero resources, so a
+            # mistyped path was indistinguishable from a successful no-op run.
+            $missing = Join-Path $TestDrive 'no-such-configuration.json'
+
+            { Start-DscRunner -FilePath $missing } |
+                Should -Throw -ExpectedMessage "*Configuration file not found*"
+        }
+
+        It "should not produce a result record for a missing configuration file" {
+            $missing = Join-Path $TestDrive 'no-such-configuration.json'
+            $result = $null
+
+            try { $result = Start-DscRunner -FilePath $missing } catch { }
+
+            $result | Should -BeNullOrEmpty
+        }
+
+        It "should throw for an unsupported file extension even when the file exists" {
+            { Start-DscRunner -FilePath $script:testTextPath } |
+                Should -Throw -ExpectedMessage "*Unsupported configuration file extension*"
+        }
+
+        It "should throw when the configuration file parses to nothing" {
+            Mock -CommandName Get-Content -MockWith { return '' }
+            Mock -CommandName ConvertFrom-Json -MockWith { return $null }
+
+            { Start-DscRunner -FilePath $script:testJsonPath } |
+                Should -Throw -ExpectedMessage "*empty or contains no readable content*"
+        }
+
+        It "should throw when the configuration file parses to an empty document" {
+            Mock -CommandName Get-Content -MockWith { return '{}' }
+            Mock -CommandName ConvertFrom-Json -MockWith { return @{} }
+
+            { Start-DscRunner -FilePath $script:testJsonPath } |
+                Should -Throw -ExpectedMessage "*parsed to an empty document*"
+        }
+
+        It "should not produce a result record for an empty configuration file" {
+            Mock -CommandName Get-Content -MockWith { return '' }
+            Mock -CommandName ConvertFrom-Json -MockWith { return $null }
+            $result = $null
+
+            try { $result = Start-DscRunner -FilePath $script:testJsonPath } catch { }
+
+            $result | Should -BeNullOrEmpty
         }
     }
 
@@ -472,7 +540,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         }
 
         It "should handle invalid Mode parameter" {
-            { Start-DscRunner -FilePath "test.json" -Mode "Invalid" } | Should -Throw
+            { Start-DscRunner -FilePath $script:testJsonPath -Mode "Invalid" } | Should -Throw
         }
 
         It "should print a non-terminating error when the runner fails to set a resource" {
@@ -492,7 +560,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
             # in a child scope, so a $result set inside it would not propagate here. A failed
             # 'Set' is caught internally (non-terminating), so calling directly must not throw;
             # if it did, the It would fail, which is the assertion we want.
-            $result = Start-DscRunner -FilePath "test.json" -Mode "Set"
+            $result = Start-DscRunner -FilePath $script:testJsonPath -Mode "Set"
             Should -InvokeVerifiable
             $result.FailCount | Should -Be 1
 
