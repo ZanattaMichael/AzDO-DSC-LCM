@@ -83,7 +83,7 @@ function Clone-Repository
         }
     }
 
-    $headSha = (git -C $DestinationPath rev-parse HEAD) -join '' 
+    $headSha = (git -C $DestinationPath rev-parse HEAD) -join ''
     $headSha = "$headSha".Trim()
 
     # A full SHA is an exact pin: verify the clone actually landed on it.

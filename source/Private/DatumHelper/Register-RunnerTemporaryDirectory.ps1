@@ -91,7 +91,9 @@ Returns the module-scoped registry of runner-created temporary directories.
 #>
 function Get-RunnerTemporaryDirectoryRegistry {
     [CmdletBinding()]
-    [OutputType([System.Collections.Generic.HashSet[string]])]
+    # Object[] as well as the set itself: the return below wraps the set in a single-element
+    # array (see the comment there), which is the static return type the analyzer sees.
+    [OutputType([System.Collections.Generic.HashSet[string]], [System.Object[]])]
     param()
 
     if (-not $script:RunnerTemporaryDirectoryRegistry) {
