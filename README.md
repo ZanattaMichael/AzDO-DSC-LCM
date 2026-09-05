@@ -110,6 +110,33 @@ The pipeline runner provides a set of features applicable to all Desired State C
         - AzureDevOpsDscNative/AzDoProjectGroup/CON Board Administrators
     ```
 
+- __parameter tokens__: A resource property whose value is exactly `<params=Name>` is replaced
+  by the value of that pipeline parameter, with its type intact — a number stays a number, a
+  hashtable stays a hashtable. Parameters resolve first, before string interpolation, so a
+  parameter value that itself contains `$(...)` or a `$variable` reference still expands.
+  Referencing a parameter that is not declared fails that resource and records it in the run
+  report; it does not silently resolve to `$null`.
+
+    The same substitution works inside a list, and `parameters('Name')` reads a parameter
+    from a `condition` or a `postExecutionScript`.
+
+    __Example:__
+
+    ```yaml
+    parameters:
+      ServiceName:
+        defaultValue: Spooler
+      RetryCount:
+        defaultValue: 3
+
+    resources:
+      - name: Print Spooler
+        type: PSDscResources/Service
+        properties:
+          Name: <params=ServiceName>
+          RetryCount: <params=RetryCount>
+    ```
+
 These features collectively enhance the robustness and adaptability of DSC resources managed by the pipeline runner, allowing for more precise and context-sensitive configuration management.
 
 ### Configuration Specific Commands
@@ -211,9 +238,11 @@ hosted Linux agent (bootstrap, engine selection, pipeline-native auth).
 | `Connect` / `ConnectAction` / `ConnectContext` | Name of the `Connect` action (default `None`), an inline scriptblock override, and the hashtable context passed to it. |
 | `Engine` / `EngineAction` / `EngineVersion` | Name of the execution engine action (default `DscV2`; `DscV3` drives `dsc.exe`; `Auto` detects `dsc` on `PATH`), an inline scriptblock override, and a version hint used to bias `Auto` selection. When `-Engine` is not passed, `PipelineRunnerSettings.Engine` (or the back-compat `DSCResourceVersion` major version) decides. |
 | `CacheDirectory` | Directory Datum compiles into. Falls back to `PIPELINERUNNER_CACHE_DIRECTORY` (or the legacy `AZDODSC_CACHE_DIRECTORY` alias), then a fresh temporary directory — no environment variable is required. |
+| `ConfigurationRevision` | Branch, tag or commit to check out after cloning a git source. Folded into the `Source` action's context as `Revision`. A full 40-character SHA is verified against the clone's resolved HEAD. |
 | `Mode` | `Test` (default, validate only) or `Set` (validate and apply changes). |
 | `ReportPath` | Optional directory where a per-project CSV report is written after execution. |
 | `FailOnError` | Switch. Sets a non-zero process exit code when the run reports a failure. |
+| `KeepTemporaryDirectory` | Switch. Leaves any directory the runner created (a clone, a temporary cache) in place instead of removing it when the run ends. A caller-supplied local path is never removed. |
 
 ```powershell
 # Local directory, no authentication, DSC v2 engine (all defaults).
@@ -235,14 +264,22 @@ Invoke-DscRunner -Source Git -SourceContext @{ Url = $repoUrl } `
 | Parameter | Required | Description |
 |---|---|---|
 | `AzureDevopsOrganizationName` | Yes | Name of the Azure DevOps organization. |
-| `exportConfigDir` | Yes | Directory where Datum writes compiled per-project YAML files. Must exist. |
-| `ConfigurationSourcePath` | Yes | URL (cloned via git) or local directory path for the Datum configuration. |
-| `JITToken` | Yes | Just-In-Time access token. |
-| `Mode` | Yes | `Test` (validate only) or `Set` (validate and apply changes). Default: `Test`. |
-| `AuthenticationType` | No | `ManagedIdentity` (default) or `PAT`. |
-| `PATToken` | When using PAT | 52-character alphanumeric Personal Access Token. |
+| `ExportConfigDir` | Yes | Directory where Datum writes compiled per-project YAML files. Must exist. |
+| `ConfigurationSourcePath` | Yes | `https`/`ssh` URL (cloned via git) or local directory path for the Datum configuration. |
+| `ConfigurationRevision` | No | Branch, tag or commit to check out after cloning. A full 40-character SHA is verified against the clone's resolved HEAD. |
+| `JITToken` | No | Just-In-Time access token used for the clone. A `[SecureString]` or a plain string; falls back to `$env:SYSTEM_ACCESSTOKEN`. |
+| `Mode` | No | `Test` (default, validate only) or `Set` (validate and apply changes). |
+| `PATToken` | Only for PAT auth | Personal Access Token, 20–120 alphanumeric characters. Supplying it selects the PAT parameter set; omit it to authenticate with a managed identity. |
 | `ReportPath` | No | Directory path where a per-project CSV report is written after execution. |
 | `FailOnError` | No | Switch. Sets a non-zero process exit code when the run reports a failure. |
+| `KeepTemporaryDirectory` | No | Switch. Leaves a cloned configuration in place instead of removing it when the run ends. |
+
+> **Breaking change.** `-exportConfigDir` is now `-ExportConfigDir`, and
+> `-AuthenticationType` has been removed: supplying `-PATToken` selects PAT
+> authentication and omitting it uses the managed identity. Previously
+> `-AuthenticationType` defaulted independently of the token, so a caller who passed
+> `-PATToken` still went down the managed-identity path. `-Mode` and `-JITToken` are no
+> longer mandatory.
 
 > A cache directory environment variable must be set before calling `Invoke-DscPipelineRunner`. Prefer the generic `PIPELINERUNNER_CACHE_DIRECTORY`; the legacy `AZDODSC_CACHE_DIRECTORY` is still honoured as a back-compat alias. `Invoke-DscRunner` needs neither — pass `-CacheDirectory`, set one of those variables, or let it use a temporary directory.
 
@@ -416,11 +453,10 @@ CI/CD system; the self-hosted agent / Azure DevOps steps are only needed if you 
 
           Invoke-DscPipelineRunner `
             -AzureDevopsOrganizationName "$(OrganizationName)" `
-            -exportConfigDir "$(Agent.TempDirectory)\ExportedConfig" `
+            -ExportConfigDir "$(Agent.TempDirectory)\ExportedConfig" `
             -ConfigurationSourcePath "$(ConfigurationRepoUrl)" `
             -JITToken "$(System.AccessToken)" `
-            -Mode "Set" `
-            -AuthenticationType ManagedIdentity
+            -Mode "Set"
         displayName: 'Apply DSC Configuration'
     ```
 
