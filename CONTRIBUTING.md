@@ -51,8 +51,34 @@ Every push and pull request runs these GitHub Actions workflows:
 | `.github/workflows/CodeCoverage.yml` | **build** | Guards against reintroduced `LCM` naming, then runs `tests.ps1` (tests + coverage floor). |
 | `.github/workflows/Lint.yml` | **Lint (PSScriptAnalyzer)** | Static analysis; fails on Error-severity findings; uploads SARIF. |
 | `.github/workflows/DscV3-HostedAgent.yml` | **DSC v3 engine on Ubuntu**, **Build DSC v3 agent image** | Exercises the DSC v3 engine path and image build. |
+| `.github/workflows/DscV2-SelfHosted.yml` | **DSC v2 Self-Hosted Agent** | Drives a real class-based resource through `Invoke-DscResource` on a Windows self-hosted runner. |
+| `.github/workflows/AzureDevOps-SelfHosted.yml` | **Azure DevOps Real Lifecycle Self-Hosted** | End-to-end Azure DevOps lifecycle against a real organization, DSC v2 engine. |
+| `.github/workflows/AzureDevOpsV3-SelfHosted.yml` | **Azure DevOps Real Lifecycle DSC v3 Self-Hosted** | The same lifecycle through the DSC v3 engine. |
 
 A pull request should be green on all of the above before it is reviewed.
+
+### Which tests run where
+
+`tests.ps1` — the hosted `build` gate — excludes the `Integration`, `DscV2SelfHosted`,
+`AzureDevOpsSelfHosted` and `AzureDevOpsV3SelfHosted` tags. Those suites need a real DSC
+engine, a real resource, or a real Azure DevOps organization, so they run only on the
+self-hosted workflows above, which select them by tag or by path.
+
+This split matters when you touch anything `Start-DscRunner` calls. The integration suites
+**dot-source the runner's collaborators individually rather than importing the built
+module**, so a new helper in that call chain has to be added to each suite's `BeforeAll` as
+well — otherwise the hosted gate stays green and the self-hosted jobs fail with
+`CommandNotFoundException`.
+
+## Releasing
+
+Releases are tag-driven (`.github/workflows/Release.yml`). Pushing a `vX.Y.Z` tag — or
+`vX.Y.Z-preview0001` for a prerelease — validates that the tag is well-formed and points at
+a commit contained in `main`, runs the full CI suite as a release gate by reusing the
+workflows above, and publishes to the GitHub Release and the PowerShell Gallery. The version
+comes from the tag and is baked into the manifest at build time, so **do not hand-edit
+`ModuleVersion`** in `source/Dsc.PipelineRunner.psd1`. Record user-visible changes under
+`[Unreleased]` in `CHANGELOG.md` instead, and note there when a change requires a major bump.
 
 ## Not enforced in this repository
 

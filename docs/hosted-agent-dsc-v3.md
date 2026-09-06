@@ -100,6 +100,29 @@ Invoke-DscRunner -Source Git `
 Invoke-DscRunner -Source Git -SourceContext @{ Url = $repoUrl } -Engine DscV3
 ```
 
+Two more things hold for every clone, and neither is configurable:
+
+- **The remote must be `https`, `ssh`, or SCP-style `git@host:path`.** A plain `http://`
+  (or `git://`, or `file://`) URL is rejected before git runs. The configuration executes as
+  trusted code in the job's own security context, so a tamperable transport is a code
+  execution path into the agent.
+- **The clone is cleaned up.** It lands in an owner-only directory that is removed when the
+  run ends, even if the run throws — which matters most on a shared or long-lived agent.
+  `-KeepTemporaryDirectory` opts out while debugging.
+
+Pin what you fetch with `-ConfigurationRevision`, especially on an ephemeral agent where
+"whatever `main` was at that moment" is otherwise unrecoverable after the job exits:
+
+```powershell
+# Exact pin: the clone's resolved HEAD is verified against the SHA, and the run fails on a mismatch.
+Invoke-DscRunner -Source Git -SourceContext @{ Url = $repoUrl } `
+                 -ConfigurationRevision '8f0a1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b' `
+                 -Engine DscV3
+```
+
+The resolved `HEAD` SHA is written to the information stream on every clone, so the job log
+records the commit that ran even when no revision was pinned.
+
 ### Workload-identity federation (recommended — no stored PAT)
 
 A Personal Access Token is a long-lived secret you have to store, rotate and protect.

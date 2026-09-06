@@ -48,6 +48,15 @@ Every issue in the repository carrying the `bug` label.
   `ExpandString` and collapsed into `"System.Collections.Hashtable ..."`. Any array now
   expands element-wise, and a property such as `AzDoGitPermission`'s `Permissions` binds
   again.
+- **A parameter declared without a `defaultValue` resolved to `$null` instead of failing.**
+  `Get-DefaultValues` added every key in the `parameters` section to the parameter table,
+  taking `.defaultValue` even when the declaration had none. The key was then present, so
+  the presence check backing `<params=Name>` and `parameters('Name')` succeeded and the
+  token resolved to `$null` — indistinguishable from a parameter legitimately defaulted to
+  an empty string, and exactly the silent wrong value the throw added for #5 was meant to
+  prevent. Such a declaration is now skipped with a warning naming it, so referencing it
+  fails the same way an undeclared name does. An empty string or an explicit null is still
+  a declared default and still resolves.
 - **#16 — The built module exported nothing.** The seven public commands are advanced
   functions but were listed under `CmdletsToExport` with `FunctionsToExport` empty, so no
   entry point was available after `Import-Module`. `VariablesToExport = '*'` also leaked the
@@ -72,6 +81,27 @@ Every issue in the repository carrying the `bug` label.
   manifest at build time. The existing CI workflows gained a `workflow_call` trigger so
   the release reuses them as its gate instead of duplicating them.
 
+### Documentation
+
+- `README.md`: the execution walkthrough now describes the two-pass property resolution
+  (parameter tokens first, then variable interpolation and calculated properties) and refers
+  to the selected `Engine` action rather than naming `Invoke-DscResource` as the only path. A
+  new **Configuration source security** section covers the enforced clone transport, revision
+  pinning, credential handling and temporary-directory lifecycle, and the circular-reference
+  rule is described accurately: shared dependencies and diamonds are allowed, only genuine
+  cycles are rejected. The parameter-token section now states where parameter values come
+  from — a `defaultValue` in the configuration's own `parameters` section, with no
+  invocation-time override — and that a declaration carrying no `defaultValue` is ignored,
+  so referencing it fails as an undeclared name does.
+- `SECURITY.md` and `docs/trust-model.md`: plaintext `http://` interception is no longer
+  listed as an open risk to mitigate operationally — it is refused. Both pages gained a
+  "what the runner enforces" section covering transport, revision pinning, `HEAD` logging,
+  credential handling and owner-only temporary directories, while keeping the point that
+  none of it makes an untrusted configuration safe to run.
+- `docs/DECOUPLING_PLAN.md`: marked as in progress rather than proposed, with the resolved
+  rows of the coupling snapshot annotated and the acceptance criteria that have shipped
+  ticked off against what is actually in the repository.
+
 ### Breaking Changes — Public Parameter Contract and Parameter Resolution
 
 The next release should be a **major** version bump. The release workflow takes the version
@@ -93,6 +123,12 @@ An undefined parameter now throws a terminating error naming the parameter, wher
 previously returned `$null` silently. A configuration that relied on the silent `$null` -
 so that the missing value landed in a resource property and the run applied the wrong
 configuration - must declare the parameter or stop referencing it.
+
+This now covers a parameter *declared without a `defaultValue`* as well. Such a declaration
+used to be added to the parameter table with a `$null` value, which made the presence check
+succeed and the reference resolve silently; it is now skipped with a warning, so referencing
+it fails like any undeclared name. Give the parameter a `defaultValue` - an empty string is
+a legitimate one - or stop referencing it.
 
 ### Breaking Changes — Module Renamed to `Dsc.PipelineRunner`
 

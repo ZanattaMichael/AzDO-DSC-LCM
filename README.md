@@ -14,7 +14,12 @@ module.
 > ⚠️ **Security — read this first.** The runner executes your configuration repository as
 > **fully-trusted code** (a DSC `Configuration` block is code, not just data). There is no
 > sandbox. Protect the configuration repository with the same controls as the runner's own
-> source. See [SECURITY.md](SECURITY.md) and [docs/trust-model.md](docs/trust-model.md).
+> source. The runner enforces what it can on the way in — the clone transport must be
+> `https`/`ssh`, the revision can be pinned to a verified commit, and clones live in
+> owner-only directories that are removed when the run ends (see
+> [Configuration source security](#configuration-source-security)) — but none of that
+> substitutes for trusting the repository itself. See [SECURITY.md](SECURITY.md) and
+> [docs/trust-model.md](docs/trust-model.md).
 
 ## Datum
 
@@ -49,7 +54,10 @@ This module utilizes Datum from Gael Colas to streamline configuration. For more
 
 1. __Modular Pipeline Formatting and Validation Rules__: Incorporate modular scripts stored in the `\Pipeline Rules\` directory into the module build process. These scripts are responsible for validating and formatting configuration resources to meet specific requirements. They can be modified and extended as needed. The current set of scripts includes:
 
-    - `Pipeline Rules\PreParse\Test-CircularReferences.ps1`: Checks for circular references within resources. If this script detects an error, the runner will not apply any changes.
+    - `Pipeline Rules\PreParse\Test-CircularReferences.ps1`: Walks the `dependsOn` graph and
+      rejects genuine cycles, including a resource that depends on itself. A resource reached
+      by more than one branch — a diamond, or any other shared dependency — is not a cycle and
+      is allowed. If this script detects an error, the runner will not apply any changes.
     - `Pipeline Rules\PreParse\Test-ResourcesForIncorrectProperties.ps1`: Validates resource properties against documented specifications. Errors prevent the runner from applying changes.
     - `Pipeline Rules\Custom\Sort-DependsOn.ps1`: Orders resources based on their `dependsOn` property. This script is mandatory and cannot be bypassed.
     - `Pipeline Rules\Format\`: Directory reserved for format rules that pre-process task properties before execution.
@@ -120,6 +128,13 @@ The pipeline runner provides a set of features applicable to all Desired State C
     The same substitution works inside a list, and `parameters('Name')` reads a parameter
     from a `condition` or a `postExecutionScript`.
 
+    Values come from the configuration's own `parameters` section and nowhere else — each
+    parameter's `defaultValue` is the value, and there is no invocation-time override on
+    `Invoke-DscRunner`. A parameter declared *without* a `defaultValue` has no value to
+    resolve to, so it is ignored with a warning and referencing it fails exactly as an
+    undeclared name does. Give every parameter a `defaultValue`; an empty string is a
+    legitimate one, and resolves to `''` rather than failing.
+
     __Example:__
 
     ```yaml
@@ -163,15 +178,24 @@ In the realm of configuration, there are specialized commands designed to modify
 1. The runner iterates through each of the Resources and performs the following steps:
     1. Checks if `Stop-TaskProcessing` has been executed; if so, the resource will be skipped.
     1. Checks for the `condition` property and evaluates the expression. The resource executes when the condition is `$true`; a `$false` result skips the resource.
-    1. Iterates through all the properties within the resource and executes any calculated properties. This includes subexpressions such as:
+    1. Resolves the resource's properties in two passes. The first pass substitutes whole-value
+       parameter tokens (`<params=Name>`), which keeps the parameter's type intact; the second
+       pass interpolates variables and evaluates any calculated properties. Running them in that
+       order means a parameter value that itself contains a subexpression still expands. A property
+       may therefore use either form:
 
-    ```yaml
-    Ensure: $( if ([string]::IsNullOrEmpty($Project_Ensure)) { 'Present' } else { $Project_Ensure } )
-    ```
+       ```yaml
+       ServiceName: <params=ServiceName>
+       Ensure: $( if ([string]::IsNullOrEmpty($Project_Ensure)) { 'Present' } else { $Project_Ensure } )
+       ```
 
-    1. Executes the resource using `Invoke-DscResource`.
+       A token naming an undeclared parameter fails that one resource and is recorded in the run
+       report; it is not silently resolved to `$null`, and it does not abort the rest of the file.
+
+    1. Executes the resource through the selected `Engine` action — `Invoke-DscResource` for
+       `DscV2` (the default), `dsc.exe` for `DscV3`.
     1. Upon completion (even in case of an error), the runner checks for the `postExecutionScript` property and invokes the code if present.
-    1. The runner calls the DSC `Get` method on the resource and stores the result in a references table, making it available to subsequent resources via the `reference` function.
+    1. The runner calls the engine's `Get` method on the resource and stores the result in a references table, making it available to subsequent resources via the `reference` function.
 
 ## Architecture: Actions
 
@@ -282,6 +306,31 @@ Invoke-DscRunner -Source Git -SourceContext @{ Url = $repoUrl } `
 > longer mandatory.
 
 > A cache directory environment variable must be set before calling `Invoke-DscPipelineRunner`. Prefer the generic `PIPELINERUNNER_CACHE_DIRECTORY`; the legacy `AZDODSC_CACHE_DIRECTORY` is still honoured as a back-compat alias. `Invoke-DscRunner` needs neither — pass `-CacheDirectory`, set one of those variables, or let it use a temporary directory.
+
+### Configuration source security
+
+Both entry points harden the path between the configuration repository and the runner. None
+of it is optional, and none of it needs configuring:
+
+- **The clone transport is enforced, not recommended.** Only `https`, `ssh` and SCP-style
+  `git@host:path` remotes are accepted. A plain `http://` URL is rejected with a terminating
+  error naming the scheme — the configuration runs as trusted code in the runner's own
+  security context, so fetching it over a transport that can be tampered with is a remote
+  code-execution path, not a style preference.
+- **Pin the revision.** `-ConfigurationRevision` checks out a branch, tag or commit after the
+  clone. Supply a full 40-character commit SHA and the pin is exact: the clone's resolved
+  `HEAD` is verified against it and a mismatch fails the run. Whatever you pass, the resolved
+  `HEAD` SHA is written to the information stream, so the pipeline log records the commit that
+  actually ran.
+- **Credentials never reach the command line.** The token is injected as an HTTP
+  `Authorization` header through git's environment-based configuration and redacted from error
+  text. Pass a `[SecureString]` or a plain string; with neither, `$env:SYSTEM_ACCESSTOKEN` is
+  used when it is set.
+- **Temporary directories are owner-only and removed.** A clone (or a fallback cache
+  directory) is created with owner-only permissions — `0700` on Unix, a single full-control ACE
+  on Windows — and deleted when the run ends, including when it ends by throwing. Only a
+  directory the runner itself created is ever deleted; a path you supplied is left alone. Pass
+  `-KeepTemporaryDirectory` to keep a clone for debugging.
 
 ## Getting Started
 

@@ -31,29 +31,74 @@ Describe "GetDefaultValues Function Tests" -Tag Unit, Runner, Configuration {
 
     }
 
-    It "should handle missing defaultValue keys gracefully" {
+    # A declaration without a defaultValue must be omitted, not added with a $null value.
+    # Adding it makes Resolve-PipelineParameter's presence check succeed, so a <params=Name>
+    # token resolves to $null instead of throwing - the silent wrong value the throw exists
+    # to prevent.
+    It "should omit a parameter that declares no defaultValue, keeping the ones that do" {
         $source = @{
             Key1 = @{ otherProperty = "Other1" }
             Key2 = @{ defaultValue = "Value2" }
         }
-        $expected = @{
-            Key1 = $null
-            Key2 = "Value2"
-        }
-        $result = GetDefaultValues -Source $source
-        $result.Key1 | Should -Be $null
-        $result.Key2 | Should -Be "Value2"
 
+        $result = GetDefaultValues -Source $source -WarningAction SilentlyContinue
+
+        $result.ContainsKey('Key1') | Should -BeFalse
+        $result.ContainsKey('Key2') | Should -BeTrue
+        $result.Key2 | Should -Be "Value2"
     }
 
-    It "should return null for keys without defaultValue" {
+    It "should warn when a parameter declares no defaultValue" {
         $source = @{
             Key1 = @{ anotherProperty = "SomeValue" }
         }
 
-        $result = GetDefaultValues -Source $source
-        $result.Key1 | Should -Be $null
+        $warnings = @()
+        $result = GetDefaultValues -Source $source -WarningVariable warnings -WarningAction SilentlyContinue
 
+        $result.Count | Should -Be 0
+        $warnings.Count | Should -Be 1
+        $warnings[0].Message | Should -BeLike "*Key1*defaultValue*"
+    }
+
+    # An empty string and an explicit null are both *declared* defaults: the key is present,
+    # so the parameter resolves rather than failing as undeclared.
+    It "should keep a parameter whose defaultValue is an empty string" {
+        $source = @{ Key1 = @{ defaultValue = '' } }
+
+        $result = GetDefaultValues -Source $source
+
+        $result.ContainsKey('Key1') | Should -BeTrue
+        $result.Key1 | Should -Be ''
+    }
+
+    It "should keep a parameter whose defaultValue is explicitly null" {
+        $source = @{ Key1 = @{ defaultValue = $null } }
+
+        $result = GetDefaultValues -Source $source
+
+        $result.ContainsKey('Key1') | Should -BeTrue
+        $result.Key1 | Should -Be $null
+    }
+
+    # A JSON configuration is normalized to an ordered dictionary rather than a hashtable.
+    It "should read a declaration held in an ordered dictionary" {
+        $declaration = [ordered]@{ defaultValue = 'Value1' }
+        $source = @{ Key1 = $declaration }
+
+        $result = GetDefaultValues -Source $source
+
+        $result.Key1 | Should -Be 'Value1'
+    }
+
+    # A malformed declaration (a bare scalar rather than a mapping) has no defaultValue key
+    # and must not resolve to $null either.
+    It "should omit a declaration that is not a dictionary" {
+        $source = @{ Key1 = 'NotADeclaration' }
+
+        $result = GetDefaultValues -Source $source -WarningAction SilentlyContinue
+
+        $result.ContainsKey('Key1') | Should -BeFalse
     }
 
     It "should work with nested hashtables" {

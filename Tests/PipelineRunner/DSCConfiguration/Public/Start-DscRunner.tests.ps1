@@ -64,7 +64,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
             param ($content)
             return @{
                 parameters = @{
-                    param1 = "value1"
+                    param1 = @{ defaultValue = "value1" }
                 }
                 variables = @{
                     var1 = "value1"
@@ -85,7 +85,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
             param ($content)
             return @{
                 parameters = @{
-                    param1 = "value1"
+                    param1 = @{ defaultValue = "value1" }
                 }
                 variables = @{
                     var1 = "value1"
@@ -285,7 +285,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 param ($content)
                 return @{
                     parameters = @{
-                        param1 = "value1"
+                        param1 = @{ defaultValue = "value1" }
                     }
                     variables = @{
                         var1 = "value1"
@@ -325,7 +325,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                 param ($content)
                 return @{
                     parameters = @{
-                        param1 = "value1"
+                        param1 = @{ defaultValue = "value1" }
                     }
                     variables = @{
                         var1 = "value1"
