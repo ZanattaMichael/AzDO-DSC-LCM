@@ -41,7 +41,13 @@ Every issue in the repository carrying the `bug` label.
   production caller, read its list values from the caller's scope, and reported a parameter
   defined as an empty string as missing. Resource properties now resolve parameter tokens
   before string interpolation, so a token keeps the parameter's type. An unresolvable token
-  fails that one resource rather than aborting the run.
+  fails that one resource rather than aborting the run. A one-entry list is expanded
+  element-wise too, where it was previously routed to the scalar branch and stringified.
+- **Array-typed resource properties were flattened into a string.** `Expand-HashTable`
+  recognised a collection only by the ``List`1`` type name, so a plain array reached
+  `ExpandString` and collapsed into `"System.Collections.Hashtable ..."`. Any array now
+  expands element-wise, and a property such as `AzDoGitPermission`'s `Permissions` binds
+  again.
 - **#16 — The built module exported nothing.** The seven public commands are advanced
   functions but were listed under `CmdletsToExport` with `FunctionsToExport` empty, so no
   entry point was available after `Import-Module`. `VariablesToExport = '*'` also leaked the

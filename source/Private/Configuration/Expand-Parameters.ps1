@@ -49,8 +49,12 @@ Function Expand-Parameters {
             # against the wrong values, or against nothing at all outside the runner.
             $inputValue = Expand-ParameterInArray $InputHashTable[$key]
         }
-        elseif (($InputHashTable[$key] -is [array]) -and ($InputHashTable[$key].Count -ne 1)) {
-            # If the value is a string, expand the parameter
+        elseif ($InputHashTable[$key] -is [array]) {
+            # Expand every element. The Count -ne 1 guard that used to sit here sent a
+            # one-entry list to the scalar branch below, where -match stringified its
+            # element: a lone hashtable never had its tokens expanded, and a lone token
+            # collapsed the list to a scalar. Every array is now expanded element-wise and
+            # keeps its shape.
             $inputValue = Expand-ParameterInArray $InputHashTable[$key]
         }
         elseif ($InputHashTable[$key] -match '^\<params\=(?<name>.+)\>$') {

@@ -14,6 +14,10 @@ Describe "Expand-Parameters Function Tests" -Tag Unit, Runner, Configuration {
         . $expandParameterInArrayFilePath
         . $resolveParameterFilePath
 
+        # Expand-HashTable delegates array handling to Expand-StringInArray, which the
+        # two-pass chain below exercises.
+        . (Get-FunctionPath 'Expand-StringInArray.ps1').FullName
+
         # Define the script-scoped parameters hashtable
         $Script:parameters = @{
             example = 'ExpandedValue'
@@ -35,6 +39,51 @@ Describe "Expand-Parameters Function Tests" -Tag Unit, Runner, Configuration {
             $result = Expand-Parameters -InputHashTable $inputObj
             $result.outerKey.innerKey | Should -Be 'ExpandedValue'
 
+        }
+    }
+
+    Context "With Single-Element Arrays" {
+        # A one-entry array used to be routed to the scalar branch, where -match stringified
+        # its element. PowerShell still unrolls a one-element collection on return, so the
+        # value arrives as a scalar either way - what changed is that its contents are now
+        # expanded.
+        It "should expand a token in a one-entry array" {
+            $inputObj = @{ listKey = @('<params=example>') }
+
+            $result = Expand-Parameters -InputHashTable $inputObj
+            $result.listKey | Should -Be 'ExpandedValue'
+        }
+
+        It "should expand a token inside a lone hashtable entry" {
+            $inputObj = @{ listKey = @( @{ innerKey = '<params=example>' } ) }
+
+            $result = Expand-Parameters -InputHashTable $inputObj
+            $result.listKey.innerKey | Should -Be 'ExpandedValue'
+        }
+    }
+
+    Context "Chained with Expand-HashTable as Start-DscRunner calls them" {
+        It "should hand an array of hashtables through both passes intact" {
+            # The runner resolves properties as
+            # Expand-HashTable -InputHashTable (Expand-Parameters -InputHashTable ...).
+            # Datum supplies a List`1, Expand-Parameters returns a plain object[], and the
+            # second pass has to recognise that as a collection - otherwise it is flattened
+            # into a single "System.Collections.Hashtable ..." string and no array-typed
+            # resource property can bind it.
+            $permissions = [System.Collections.Generic.List[Object]]::new()
+            $permissions.Add(@{ Identity = '<params=example>'; Permission = 'Allow' })
+            $permissions.Add(@{ Identity = 'Project Valid Users'; Permission = 'Allow' })
+
+            $properties = @{ Permissions = $permissions; ProjectName = '<params=anotherExample>' }
+
+            $result = Expand-HashTable -InputHashTable (Expand-Parameters -InputHashTable $properties)
+
+            $result.Permissions -is [string] | Should -Be $false
+            { [hashtable[]]$result.Permissions } | Should -Not -Throw
+            ([hashtable[]]$result.Permissions).Count | Should -Be 2
+            $result.Permissions[0].Identity | Should -Be 'ExpandedValue'
+            $result.Permissions[1].Identity | Should -Be 'Project Valid Users'
+            $result.ProjectName | Should -Be 'AnotherExpandedValue'
         }
     }
 
