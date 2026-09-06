@@ -80,7 +80,10 @@ Every issue in the repository carrying the `bug` label.
   new **Configuration source security** section covers the enforced clone transport, revision
   pinning, credential handling and temporary-directory lifecycle, and the circular-reference
   rule is described accurately: shared dependencies and diamonds are allowed, only genuine
-  cycles are rejected.
+  cycles are rejected. The parameter-token section now states where parameter values come
+  from — a `defaultValue` in the configuration's own `parameters` section, with no
+  invocation-time override — and distinguishes an undeclared parameter, which throws, from
+  one declared without a `defaultValue`, which resolves to `$null`.
 - `SECURITY.md` and `docs/trust-model.md`: plaintext `http://` interception is no longer
   listed as an open risk to mitigate operationally — it is refused. Both pages gained a
   "what the runner enforces" section covering transport, revision pinning, `HEAD` logging,

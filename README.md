@@ -128,6 +128,13 @@ The pipeline runner provides a set of features applicable to all Desired State C
     The same substitution works inside a list, and `parameters('Name')` reads a parameter
     from a `condition` or a `postExecutionScript`.
 
+    Values come from the configuration's own `parameters` section and nowhere else — each
+    parameter's `defaultValue` is the value, and there is no invocation-time override on
+    `Invoke-DscRunner`. Note the difference between the two failure shapes: a token naming a
+    parameter that was never declared throws, but a parameter declared *without* a
+    `defaultValue` is still declared, so it resolves to `$null` rather than failing. Give
+    every parameter a `defaultValue`.
+
     __Example:__
 
     ```yaml
