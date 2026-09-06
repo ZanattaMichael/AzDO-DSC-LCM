@@ -37,7 +37,8 @@ conditions: { ... }                      # pipeline-only
 ```
 
 Start-DscRunner consumes this one resource at a time: it sorts by `dependsOn`, evaluates
-`condition`, expands `variables` into `properties`, and calls the selected engine per resource.
+`condition`, resolves `properties` (parameter tokens first, then `variables` and calculated
+properties), and calls the selected engine per resource.
 The `DscV3` engine turns each resource into `dsc resource test|set|get --resource <type>
 --input <json>`.
 
@@ -81,8 +82,10 @@ Two things the runner keeps as its own responsibility, by design:
 
 - **Ordering.** `dependsOn` is not carried into the document — the runner has already ordered
   the resources (Sort-DependsOn). Pass them in the order you want them evaluated.
-- **Resolution.** `properties` are emitted verbatim. Expand any runner variables
-  (`Expand-HashTable`) before converting if you want a fully-resolved document.
+- **Resolution.** `properties` are emitted verbatim. Run the runner's own two-pass
+  resolution — `Expand-HashTable -InputHashTable (Expand-Parameters -InputHashTable $properties)`
+  — before converting if you want a fully-resolved document; parameter tokens first, then
+  variables and calculated properties.
 
 ### Resource types must be DSC v3 types
 

@@ -1,8 +1,12 @@
 # Dsc.PipelineRunner — Azure DevOps Decoupling & DSC v3 Plan
 
-Status: proposed
+Status: in progress — Phases 1–3 largely delivered; see §7 for what has actually landed
 Owner: @ZanattaMichael
 Tracking epic: [#20](https://github.com/ZanattaMichael/Dsc.PipelineRunner/issues/20)
+
+> **Reading this document.** §2 ("Current coupling") is a dated snapshot taken when the plan
+> was written and is kept as the record of what the work started from — several of its rows
+> have since been fixed and are annotated as such. §7 is the live status.
 
 ## 1. Goal
 
@@ -29,13 +33,13 @@ gate a release, not the architecture, and should not block the decoupling work.
 
 | Coupling point | File | Detail |
 |---|---|---|
-| Requires `AzureDevOpsDscNative` + `.Common` | `source/Dsc.PipelineRunner.psd1` (RequiredModules, lines 63–70) | Loaded for every consumer even when not on AzDO |
-| AzDO auth call | `source/Public/Invoke-DscPipelineRunner.ps1:136–139` | `New-AzDoAuthenticationProvider` (PAT / ManagedIdentity) |
-| AzDO-named cache var | `Invoke-DscPipelineRunner.ps1:108` | Throws unless `$env:AZDODSC_CACHE_DIRECTORY` is set |
-| AzDO-specific params | `Invoke-DscPipelineRunner.ps1:47–68` | `AzureDevopsOrganizationName`, `JITToken`, PAT validator |
-| Clone over plaintext, JIT helper | `source/Private/DatumHelper/Clone-Repository.ps1`, `git.ps1` | AzDO PAT credential helper; #9, #31 |
-| DSC v2 only | `source/Private/Runner/Start-DscRunner.ps1:182,205,245` | `Invoke-DscResource` — Windows-first, PS 5.1 / DSC-v2 semantics |
-| Manifest URIs | `Dsc.PipelineRunner.psd1:134,137,140` | Point at old `AzDO-DSC-LCM` repo (404) — also the last live "LCM" strings |
+| ~~Requires `AzureDevOpsDscNative` + `.Common`~~ **fixed** | `source/Dsc.PipelineRunner.psd1` (RequiredModules) | Both removed; Azure DevOps loads on demand inside `Actions/Connect/AzureDevOps.ps1` |
+| AzDO auth call | `source/Public/Invoke-DscPipelineRunner.ps1` | Still calls `New-AzDoAuthenticationProvider`, but softly: it is resolved at runtime and a clear error points at `Invoke-DscRunner` when the module is absent. The provider-agnostic path is `Actions/Connect/AzureDevOps.ps1` |
+| ~~AzDO-named cache var~~ **fixed** | `source/Private/Configuration/Resolve-CacheDirectory.ps1` | `PIPELINERUNNER_CACHE_DIRECTORY` is preferred, `AZDODSC_CACHE_DIRECTORY` kept as a back-compat alias, and `Invoke-DscRunner` needs neither |
+| AzDO-specific params | `Invoke-DscPipelineRunner.ps1` | `AzureDevopsOrganizationName`, `JITToken`, PAT validator. Retained deliberately — this entry point is now a back-compat shim over `Invoke-DscRunner` (#17 tightened its parameter sets) |
+| ~~Clone over plaintext, JIT helper~~ **fixed** | `source/Private/DatumHelper/Clone-Repository.ps1`, `git.ps1` | #9, #31, #32 closed: `Assert-SecureGitUrl` refuses anything but https/ssh, `-Revision` pins and verifies the commit, and clones live in owner-only directories removed in a `finally` |
+| ~~DSC v2 only~~ **fixed** | `source/Private/Runner/Start-DscRunner.ps1` | The three call sites route through `Invoke-EngineAction`; `Actions/Engine/DscV3.ps1` drives `dsc` |
+| ~~Manifest URIs~~ **fixed** | `Dsc.PipelineRunner.psd1` | `ProjectUri`/`LicenseUri` repointed at this repository; `IconUri` now serves the raw image (#16) |
 | Historical "LCM" text | `CHANGELOG.md` | Migration table still spells out `AZDO-DSC-LCM`, `Invoke-AZDoLCM`, `LCMConfigSettings` |
 
 The good news the epic already notes: the **core evaluation loop
@@ -309,19 +313,24 @@ source, manifest, and config; the only permissible residue is a clearly past-ten
 migration note, and even that avoids the acronym where a plain phrase works. A CI
 grep-guard enforces "no new LCM" going forward.
 
+**Done.** The manifest URIs point at this repository, no live code or configuration
+mentions the term, and `.github/workflows/CodeCoverage.yml` fails the build on any match
+under `source`, `Actions` or `Pipeline Rules`. What remains is the past-tense migration
+guide in `CHANGELOG.md` and this plan's own history-facing text.
+
 ## 7. Acceptance criteria (roll-up)
 
-- [ ] Core imports and runs with `AzureDevOpsDscNative` absent (#20)
-- [ ] `AzureDevOpsDscNative` / `AzureDevOpsDsc.Common` removed from core `RequiredModules` (#20)
-- [ ] AzDO logic lives in an opt-in `Actions/Connect/AzureDevOps.ps1` — single module, no separate package, no hard dependency (#20)
-- [ ] A custom `Source`/`Connect`/`Engine` action (drop-in file or inline scriptblock) works without forking (#20)
-- [ ] Integration test: core runs against a local dir with `Connect: None`, no AzDO connection (#20)
-- [ ] Engines load via `Actions/Engine/` and every engine passes the shared typed-contract Pester test (#21)
+- [x] Core imports and runs with `AzureDevOpsDscNative` absent (#20) — the full Pester suite runs on a hosted Ubuntu agent with neither Azure DevOps module installed
+- [x] `AzureDevOpsDscNative` / `AzureDevOpsDsc.Common` removed from core `RequiredModules` (#20)
+- [x] AzDO logic lives in an opt-in `Actions/Connect/AzureDevOps.ps1` — single module, no separate package, no hard dependency (#20)
+- [x] A custom `Source`/`Connect`/`Engine` action (drop-in file or inline scriptblock) works without forking (#20) — `-SourceAction` / `-ConnectAction` / `-EngineAction` on `Invoke-DscRunner`, each covered by the suite
+- [x] Integration test: core runs against a local dir with `Connect: None`, no AzDO connection (#20) — `Start-DscRunner.Integration.tests.ps1` drives the loop against a local configuration with an inline engine and no connection; `Invoke-DscRunner.tests.ps1` covers `Connect: None` as the default
+- [x] Engines load via `Actions/Engine/` and every engine passes the shared typed-contract Pester test (#21) — `Tests/PipelineRunner/DSCConfiguration/Engine/Engine-Contract.tests.ps1` runs against every file in `Actions/Engine/`
 - [x] `dsc.exe` (DSC v3) engine selectable (`Engine: DscV3`) and green in CI on Linux (#21)
 - [x] Pipeline-native auth: SecureString tokens, `System.AccessToken`, no token in logs (#22)
 - [x] Runner returns a machine-readable result and a non-zero exit on failure (#19)
-- [ ] Phase-0 correctness bugs fixed with Pester coverage (#7–#14, #18, #28)
-- [ ] Zero "LCM" occurrences in source/manifest/config; CI grep-guard in place
+- [x] Phase-0 correctness bugs fixed with Pester coverage (#7–#14, #18, #28) — closed, as are the eight later `bug`-labelled issues (#5, #6, #9, #15, #16, #17, #31, #32)
+- [x] Zero "LCM" occurrences in source/manifest/config; CI grep-guard in place — the only remaining matches are the past-tense migration guide in `CHANGELOG.md` and the guard itself
 - [ ] Code-signing & supply-chain (#38, #36) landed **after** the above
 
 ## 8. Sequencing summary

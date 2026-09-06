@@ -72,6 +72,24 @@ Every issue in the repository carrying the `bug` label.
   manifest at build time. The existing CI workflows gained a `workflow_call` trigger so
   the release reuses them as its gate instead of duplicating them.
 
+### Documentation
+
+- `README.md`: the execution walkthrough now describes the two-pass property resolution
+  (parameter tokens first, then variable interpolation and calculated properties) and refers
+  to the selected `Engine` action rather than naming `Invoke-DscResource` as the only path. A
+  new **Configuration source security** section covers the enforced clone transport, revision
+  pinning, credential handling and temporary-directory lifecycle, and the circular-reference
+  rule is described accurately: shared dependencies and diamonds are allowed, only genuine
+  cycles are rejected.
+- `SECURITY.md` and `docs/trust-model.md`: plaintext `http://` interception is no longer
+  listed as an open risk to mitigate operationally — it is refused. Both pages gained a
+  "what the runner enforces" section covering transport, revision pinning, `HEAD` logging,
+  credential handling and owner-only temporary directories, while keeping the point that
+  none of it makes an untrusted configuration safe to run.
+- `docs/DECOUPLING_PLAN.md`: marked as in progress rather than proposed, with the resolved
+  rows of the coupling snapshot annotated and the acceptance criteria that have shipped
+  ticked off against what is actually in the repository.
+
 ### Breaking Changes — Public Parameter Contract and Parameter Resolution
 
 The next release should be a **major** version bump. The release workflow takes the version
