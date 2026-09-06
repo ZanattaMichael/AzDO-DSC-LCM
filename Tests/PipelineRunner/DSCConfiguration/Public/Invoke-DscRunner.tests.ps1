@@ -11,6 +11,8 @@ Describe "Invoke-DscRunner Function Tests" -Tag Unit, Runner {
             (Get-FunctionPath 'Start-DscRunner.ps1')
             (Get-FunctionPath 'Merge-DscRunnerResult.ps1')
             (Get-FunctionPath 'New-TemporaryDirectory.ps1')
+            (Get-FunctionPath 'Register-RunnerTemporaryDirectory.ps1')
+            (Get-FunctionPath 'Remove-RunnerTemporaryDirectory.ps1')
             (Get-FunctionPath 'Get-PipelineRunnerSetting.ps1')
             (Get-FunctionPath 'Test-DscExecutableAvailable.ps1')
             (Get-FunctionPath 'Resolve-DscEngine.ps1')
@@ -31,7 +33,9 @@ Describe "Invoke-DscRunner Function Tests" -Tag Unit, Runner {
         }
         Mock -CommandName Build-DatumConfiguration
         Mock -CommandName Start-DscRunner
-        Mock -CommandName New-TemporaryDirectory -MockWith { return @{ Path = $cacheDir } }
+        # New-TemporaryDirectory now returns the path as a string (#9).
+        Mock -CommandName New-TemporaryDirectory -MockWith { return $cacheDir }
+        Mock -CommandName Remove-RunnerTemporaryDirectory
         # No engine signal by default so the existing tests keep the DscV2 default and never
         # touch the filesystem for a Datum.yml. Engine-selection tests override this per-It.
         Mock -CommandName Get-PipelineRunnerSetting -MockWith { return $null }
@@ -287,4 +291,69 @@ Describe "Invoke-DscRunner Function Tests" -Tag Unit, Runner {
         }
     }
 
+    Context "Configuration revision pinning (#31)" {
+
+        It "Folds -ConfigurationRevision into the Source context" {
+            Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir -ConfigurationRevision 'v1.2.3'
+            Assert-MockCalled -CommandName Invoke-Action -Exactly 1 -Scope It -ParameterFilter {
+                $Hook -eq 'Source' -and $Context.Revision -eq 'v1.2.3'
+            }
+        }
+
+        It "Leaves the Source context without a Revision key when none is supplied" {
+            Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir
+            Assert-MockCalled -CommandName Invoke-Action -Exactly 1 -Scope It -ParameterFilter {
+                $Hook -eq 'Source' -and -not $Context.ContainsKey('Revision')
+            }
+        }
+
+        It "Does not override a Revision already present in -SourceContext" {
+            Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir `
+                             -SourceContext @{ Revision = 'explicit' } -ConfigurationRevision 'v1.2.3'
+            Assert-MockCalled -CommandName Invoke-Action -Exactly 1 -Scope It -ParameterFilter {
+                $Hook -eq 'Source' -and $Context.Revision -eq 'explicit'
+            }
+        }
+    }
+
+    Context "Temporary directory lifecycle (#32)" {
+
+        It "Cleans up the configuration and cache directories after a successful run" {
+            Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir
+
+            Assert-MockCalled -CommandName Remove-RunnerTemporaryDirectory -Exactly 1 -Scope It -ParameterFilter { $Path -eq $configDir }
+            Assert-MockCalled -CommandName Remove-RunnerTemporaryDirectory -Exactly 1 -Scope It -ParameterFilter { $Path -eq $cacheDir }
+        }
+
+        It "Cleans up even when the run throws" {
+            Mock -CommandName Build-DatumConfiguration -MockWith { throw 'compile failed' }
+
+            { Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir } | Should -Throw
+
+            Assert-MockCalled -CommandName Remove-RunnerTemporaryDirectory -Exactly 1 -Scope It -ParameterFilter { $Path -eq $configDir }
+        }
+
+        It "Cleans up when the Source action returns nothing" {
+            Mock -CommandName Invoke-Action -MockWith { return $null }
+
+            { Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir } | Should -Throw
+
+            Assert-MockCalled -CommandName Remove-RunnerTemporaryDirectory -Scope It
+        }
+
+        It "Leaves the directories in place with -KeepTemporaryDirectory" {
+            Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir -KeepTemporaryDirectory
+
+            Assert-MockCalled -CommandName Remove-RunnerTemporaryDirectory -Exactly 0 -Scope It
+        }
+
+        It "Uses the string returned by New-TemporaryDirectory as the fallback cache directory" {
+            # The old code read a .Path property off a DirectoryInfo, which is always $null (#9).
+            Invoke-DscRunner -ConfigurationSourcePath $configDir
+
+            Assert-MockCalled -CommandName Build-DatumConfiguration -Exactly 1 -Scope It -ParameterFilter {
+                $OutputPath -eq $cacheDir
+            }
+        }
+    }
 }

@@ -49,12 +49,14 @@ if ([string]::IsNullOrWhiteSpace($url)) {
 $JITToken = Get-PipelineAuthToken -Token $Context.Token
 
 Write-Verbose "[Actions/Source/Git] Cloning '$url'."
-$clonePath = Clone-Repository -DatumURLConfig $url
 
-# Optionally pin to a specific revision.
+# Revision pinning (and full-SHA verification) lives in Clone-Repository so every caller -
+# this action and the back-compat Invoke-DscPipelineRunner entry point alike - gets the
+# same behaviour, rather than each re-implementing the checkout.
+$cloneArgs = @{ DatumURLConfig = $url }
 if (-not [string]::IsNullOrWhiteSpace($Context.Revision)) {
-    Write-Verbose "[Actions/Source/Git] Checking out revision '$($Context.Revision)'."
-    $null = git -C $clonePath checkout $Context.Revision
+    Write-Verbose "[Actions/Source/Git] Pinning to revision '$($Context.Revision)'."
+    $cloneArgs.Revision = $Context.Revision
 }
 
-return $clonePath
+return Clone-Repository @cloneArgs

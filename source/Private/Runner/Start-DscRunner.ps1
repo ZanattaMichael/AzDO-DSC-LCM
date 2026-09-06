@@ -100,9 +100,17 @@ function Start-DscRunner {
     $fileExtension = [System.IO.Path]::GetExtension($FilePath)
     Write-Verbose "File extension determined: $fileExtension"
 
-    # Reject unsupported inputs up front, before any reporting state is set up.
     if ($fileExtension -notin '.yaml', '.yml', '.json') {
         throw "[Start-DscRunner] Unsupported configuration file extension '$fileExtension'. Expected .yaml, .yml or .json."
+    }
+
+    # Reject unsupported inputs up front, before any reporting state is set up (#15). A
+    # missing file used to make Get-Content emit a *non-terminating* error, leaving $pipeline
+    # $null; the run then completed with zero resources and reported 'Completed', so a typo
+    # in a path looked exactly like a successful no-op run.
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        throw [System.IO.FileNotFoundException]::new(
+            "[Start-DscRunner] Configuration file not found: '$FilePath'.", $FilePath)
     }
 
     # Run-level bookkeeping. Results are structured records, deduplicated by the
@@ -140,9 +148,11 @@ function Start-DscRunner {
         $resultIndex[$key] = $record
     }
 
-    # Load the configuration from the YAML or JSON file into the $pipeline variable
+    # Load the configuration from the YAML or JSON file into the $pipeline variable.
+    # -LiteralPath throughout: a configuration path is data, and a bracket in a directory
+    # name would otherwise be read as a wildcard.
     if ($fileExtension -eq ".yaml" -or $fileExtension -eq ".yml") {
-        $pipeline = Get-Content $FilePath | ConvertFrom-Yaml
+        $pipeline = Get-Content -LiteralPath $FilePath | ConvertFrom-Yaml
         Write-Verbose "Loaded YAML configuration from file: $FilePath"
     }
     else {
@@ -151,8 +161,22 @@ function Start-DscRunner {
         # (e.g. Sort-DependsOn's $Resource.Type, Start-DscRunner's $task.Condition) and would
         # silently collapse every resource onto the same empty key. Normalize to case-insensitive
         # hashtables so a JSON configuration behaves exactly like the YAML loader's output.
-        $pipeline = ConvertTo-CaseInsensitiveHashtable -InputObject (Get-Content $FilePath | ConvertFrom-Json -AsHashtable)
+        $pipeline = ConvertTo-CaseInsensitiveHashtable -InputObject (Get-Content -LiteralPath $FilePath | ConvertFrom-Json -AsHashtable)
         Write-Verbose "Loaded JSON configuration from file: $FilePath"
+    }
+
+    # An empty or content-free configuration file must not report a clean 'Completed' run
+    # with zero resources - that is indistinguishable from a successful run and hides the
+    # real problem (#15).
+    if ($null -eq $pipeline) {
+        throw "[Start-DscRunner] The configuration file '$FilePath' is empty or contains no readable content."
+    }
+
+    $pipelineKeyCount = if ($pipeline -is [System.Collections.IDictionary]) { $pipeline.Keys.Count }
+                        else { @($pipeline.PSObject.Properties).Count }
+
+    if ($pipelineKeyCount -eq 0) {
+        throw "[Start-DscRunner] The configuration file '$FilePath' parsed to an empty document; expected at least a 'resources' section."
     }
 
     # Clear any existing data in these hashtables before populating them
@@ -256,12 +280,28 @@ function Start-DscRunner {
             $resourceType = $task.type.Split("/")[1]
             Write-Verbose "Extracted module name: $module and resource type: $resourceType"
 
-            # Replace any variables in the properties with their actual values
-            $Property = Expand-HashTable -InputHashTable $task.properties
-            Write-Verbose "Replaced variables in properties with actual values"
-
             $resourceStatus = 'OK'
             $resourceError = $null
+
+            # Resolve the properties in two passes. Expand-Parameters runs first and does
+            # whole-scalar substitution of `<params=Name>` tokens, so a parameter keeps its
+            # type (a number stays a number, a hashtable stays a hashtable). Expand-HashTable
+            # then runs string interpolation over the result, so a parameter value that
+            # itself contains $(...) or a $variable reference still expands.
+            #
+            # An unresolvable token is this resource's failure, not the run's: expansion is
+            # inside the same guard as the engine call so one bad property does not abort the
+            # remaining tasks.
+            try {
+                $Property = Expand-HashTable -InputHashTable (Expand-Parameters -InputHashTable $task.properties)
+                Write-Verbose "Replaced parameters and variables in properties with actual values"
+            }
+            catch {
+                Write-Error "[Start-DscRunner] Could not resolve the properties of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
+                & $recordResult $task.type $task.name 'FAIL' $resourceStopwatch.ElapsedMilliseconds $_.Exception.Message
+                Write-Information ("[{0}/{1}] FAIL {2} ({3}ms) - {4}" -f $TaskCounter, $totalTasks, $resourceKey, $resourceStopwatch.ElapsedMilliseconds, $_.Exception.Message) -Tags $infoTag
+                continue
+            }
 
             # Execute the 'Test' method to determine if the state is as desired.
             # The resource is evaluated through the selected engine (DscV2 / DscV3 / custom),

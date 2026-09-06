@@ -47,8 +47,14 @@ Function Expand-HashTable {
             # Keep the boolean value as is
             $inputValue = $InputHashTable[$key]
         }
-        # Test if the property is a list
-        elseif ($InputHashTable[$key].GetType().Name -eq 'List`1') {
+        # Test if the property is a list or a plain array. Matching on the List`1 type name
+        # alone was enough while Datum's own collections came straight in, but the property
+        # chain now runs Expand-Parameters first and that returns a plain object[]. Without
+        # the array test those values fell through to ExpandString below, which flattened a
+        # collection of hashtables into the single string
+        # "System.Collections.Hashtable System.Collections.Hashtable ..." and broke every
+        # resource with an array-typed property.
+        elseif (($InputHashTable[$key].GetType().Name -eq 'List`1') -or ($InputHashTable[$key] -is [array])) {
             # Expand the string in the list (read from this hashtable, not the
             # caller-scope $task, so nested/recursive expansion uses the right values)
             $inputValue = Expand-StringInArray $InputHashTable[$key]

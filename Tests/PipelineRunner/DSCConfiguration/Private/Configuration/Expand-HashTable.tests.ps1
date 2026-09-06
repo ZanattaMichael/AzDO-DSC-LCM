@@ -38,6 +38,46 @@ Describe "Expand-HashTable Function Tests" -Tag Unit, Runner, Configuration {
         }
     }
 
+    Context "With Plain Array Values" {
+        It "should expand a plain array without flattening it to a string" {
+            $inputHashTable = @{ ArrayKey = @('value1', 'value2') }
+            $result = Expand-HashTable -InputHashTable $inputHashTable
+            $result.ArrayKey -is [array] | Should -Be $true
+            $result.ArrayKey | Should -Be @('value1', 'value2')
+        }
+
+        It "should keep an array of hashtables assignable to a hashtable[] property" {
+            # Expand-Parameters runs ahead of this function and returns a plain object[]
+            # where Datum supplied a List`1. Matching on the List`1 type name alone sent
+            # that value to ExpandString, which flattened it to
+            # "System.Collections.Hashtable System.Collections.Hashtable" and made every
+            # array-typed resource property fail to bind.
+            $inputHashTable = @{
+                Permissions = @(
+                    @{ Identity = 'Project Administrators'; Permission = 'Allow' },
+                    @{ Identity = 'Project Valid Users'; Permission = 'Allow' }
+                )
+            }
+            $result = Expand-HashTable -InputHashTable $inputHashTable
+            $result.Permissions -is [string] | Should -Be $false
+            { [hashtable[]]$result.Permissions } | Should -Not -Throw
+            ([hashtable[]]$result.Permissions).Count | Should -Be 2
+            $result.Permissions[0].Identity | Should -Be 'Project Administrators'
+            $result.Permissions[1].Identity | Should -Be 'Project Valid Users'
+        }
+
+        It "should expand the element of a single-element array" {
+            # PowerShell unrolls a one-element collection on return, so the value arrives as
+            # a scalar. That is long-standing behaviour of these helpers and harmless - a
+            # scalar coerces back to a one-element array on property assignment - but the
+            # element still has to come through expanded.
+            $inputHashTable = @{ ArrayKey = @('Hello $env:USERNAME') }
+            $expected = $ExecutionContext.InvokeCommand.ExpandString('Hello $env:USERNAME')
+            $result = Expand-HashTable -InputHashTable $inputHashTable
+            $result.ArrayKey | Should -Be $expected
+        }
+    }
+
     Context "With Nested Hashtable" {
         It "should recursively expand nested hashtables" {
             $inputHashTable = @{ NestedKey = @{ InnerKey = 'InnerValue' } }

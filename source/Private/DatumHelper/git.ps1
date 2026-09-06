@@ -10,6 +10,11 @@
     process could read it. The token may be supplied as a [SecureString] (preferred) or a plain string.
     Any error text is scrubbed of the token before being returned.
 
+    HTTP Basic requires a base64-encoded "user:password" pair. Get-PipelineAuthToken returns a *raw*
+    PAT (or $env:SYSTEM_ACCESSTOKEN), so passing it through verbatim produced a malformed header and
+    every authenticated clone failed (#9). ConvertTo-BasicAuthCredential now normalises whichever form
+    the caller supplied into a correctly encoded credential.
+
 .PARAMETER args
     The arguments to pass to the git command.
 
@@ -45,7 +50,7 @@ function git {
             # stays off the process command line (argv). git reads these on start-up.
             $env:GIT_CONFIG_COUNT = '1'
             $env:GIT_CONFIG_KEY_0 = 'http.extraHeader'
-            $env:GIT_CONFIG_VALUE_0 = "Authorization: Basic $plainToken"
+            $env:GIT_CONFIG_VALUE_0 = "Authorization: Basic $(ConvertTo-BasicAuthCredential -Token $plainToken)"
             $configVarsSet = $true
         }
 

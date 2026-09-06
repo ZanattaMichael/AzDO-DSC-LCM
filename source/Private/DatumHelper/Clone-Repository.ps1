@@ -1,41 +1,99 @@
 
 <#
 .SYNOPSIS
-Clones a Git repository to a specified destination path.
+Clones a Git repository into a private temporary directory.
 
 .DESCRIPTION
-The Clone-Repository function clones a Git repository from a specified URL to a temporary directory.
+Clone-Repository clones a Git repository into a freshly created, owner-only temporary
+directory (see New-TemporaryDirectory) and returns that directory's path.
 
-.PARAMETER DatumURLConfigu
+Only transport-encrypted remotes are accepted (#31). A plain `http://` URL is rejected
+outright: the runner executes the cloned configuration as trusted code in its own
+security context, so fetching it over a channel an attacker can tamper with is a remote
+code execution path, not a convenience. Accepted forms are:
+
+  * https://host/path
+  * ssh://host/path  and  git://... is NOT accepted
+  * SCP-style git@host:path
+
+When -Revision is supplied the clone is checked out at that branch, tag, or commit. If a
+full 40-character commit SHA is given, the resulting HEAD is verified against it and a
+mismatch is a terminating error, so a pinned configuration cannot silently drift.
+
+The resolved HEAD SHA is written to the information stream (tag 'Dsc.PipelineRunner') so
+a pipeline log records exactly which commit was executed.
+
+.PARAMETER DatumURLConfig
 The URL of the Git repository to clone.
 
+.PARAMETER Revision
+Optional branch, tag, or commit to check out after cloning.
+
 .PARAMETER DestinationPath
-The path where the repository should be cloned to.
+Optional destination directory. When omitted a new private temporary directory is created.
 
 .EXAMPLE
-Clone-Repository -DatumURLConfigu "https://github.com/example/repo.git" -DestinationPath "C:\Repositories\Repo"
+Clone-Repository -DatumURLConfig "https://github.com/example/repo.git"
+
+.EXAMPLE
+Clone-Repository -DatumURLConfig "https://github.com/example/repo.git" -Revision 'v1.2.3'
+
+.OUTPUTS
+[string] The local directory the repository was cloned into.
 
 .NOTES
-This function requires Git to be installed and available in the system's PATH.
+Requires Git to be installed and available in the system's PATH. Authentication is
+handled by the module's `git` wrapper, which reads $JITToken from the calling scope.
 #>
 function Clone-Repository
 {
     [CmdletBinding()]
+    [OutputType([string])]
     param (
         [Parameter(Mandatory=$true)]
-        [string]$DatumURLConfig
+        [string]$DatumURLConfig,
+
+        [Parameter()]
+        [string]$Revision,
+
+        [Parameter()]
+        [string]$DestinationPath
     )
 
-    $tempDirectory = New-TemporaryDirectory
-    $GitURL = [System.Uri]::IsWellFormedUriString($DatumURLConfig, [System.UriKind]::Absolute)
+    Assert-SecureGitUrl -Url $DatumURLConfig
 
-    if (-not $GitURL) {
-        Throw "[Clone-Repository] The specified Git URL is invalid."
+    if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
+        $DestinationPath = New-TemporaryDirectory
     }
 
-    # Clone the repository into the temporary directory
-    $null = git clone $GitURL $tempDirectory
+    # Clone the repository into the destination directory. Pass the URL *string* - an
+    # earlier revision passed the boolean result of a URL validity check, so git received
+    # the literal 'True' as its remote (#9). --single-branch keeps the fetch minimal.
+    $cloneOutput = git clone --single-branch $DatumURLConfig $DestinationPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "[Clone-Repository] git clone of '$DatumURLConfig' failed with exit code $LASTEXITCODE. $cloneOutput"
+    }
 
-    return $tempDirectory.Path
+    # Pin to the requested revision, if any. This lives here (rather than in each Source
+    # action) so every caller gets the same pinning and verification behaviour.
+    if (-not [string]::IsNullOrWhiteSpace($Revision)) {
+        $checkoutOutput = git -C $DestinationPath checkout --quiet $Revision
+        if ($LASTEXITCODE -ne 0) {
+            throw "[Clone-Repository] Could not check out revision '$Revision' from '$DatumURLConfig'. $checkoutOutput"
+        }
+    }
 
+    $headSha = (git -C $DestinationPath rev-parse HEAD) -join ''
+    $headSha = "$headSha".Trim()
+
+    # A full SHA is an exact pin: verify the clone actually landed on it.
+    if ((-not [string]::IsNullOrWhiteSpace($Revision)) -and ($Revision -match '^[0-9a-fA-F]{40}$')) {
+        if ($headSha -ne $Revision.ToLowerInvariant() -and $headSha -ne $Revision) {
+            throw "[Clone-Repository] Revision verification failed for '$DatumURLConfig': expected HEAD '$Revision' but the clone is at '$headSha'."
+        }
+    }
+
+    Write-Information -MessageData "[Clone-Repository] Cloned '$DatumURLConfig' at commit '$headSha' into '$DestinationPath'." -Tags 'Dsc.PipelineRunner'
+
+    return $DestinationPath
 }

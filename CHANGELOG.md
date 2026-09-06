@@ -4,8 +4,66 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+Every issue in the repository carrying the `bug` label.
+
+- **#9 — Git clone was passing a boolean instead of the repository URL.**
+  `Clone-Repository` assigned `[System.Uri]::IsWellFormedUriString(...)` to the URL
+  variable, so every clone ran as `git clone True <destination>`. The function also
+  returned `$null`, because `New-TemporaryDirectory` emitted a `[DirectoryInfo]` and both
+  call sites read a `.Path` property that type does not have. `New-TemporaryDirectory` now
+  returns the path as a string, and the clone returns the directory it cloned into.
+- **#9 — Authenticated clones were sending a malformed Authorization header.** The `git`
+  wrapper placed the raw token into `Authorization: Basic <token>` without base64-encoding
+  it. A raw token is now encoded as `x-access-token:<token>`, which Azure DevOps and GitHub
+  both accept; a credential that is already base64-encoded is passed through unchanged.
+- **#31 — `Invoke-DscPipelineRunner` cloned `http://` URLs.** Configuration is now fetched
+  over `https` or `ssh` only (SCP-style `git@host:path` included); any other scheme is
+  rejected before git runs. The resolved HEAD commit is logged on the information stream so
+  a run records exactly what it applied.
+- **#32 — Clone directories were world-readable and never cleaned up.** Temporary
+  directories are created owner-only (0700 on Unix, a single-identity DACL on Windows) and
+  removed in a `finally` block at both entry points. Only directories the runner itself
+  created are removed - a caller-supplied local path is never deleted. Pass
+  `-KeepTemporaryDirectory` to leave them in place for debugging.
+- **#15 — A missing or empty configuration file reported a successful run.** `Get-Content`
+  raised a non-terminating error, the parsed document stayed `$null`, and the run reported
+  `Completed` with zero resources. `Start-DscRunner` now rejects an unsupported extension, a
+  path that does not exist, and a document that parses to nothing, each with a terminating
+  error naming the file.
+- **#6 — Valid dependency graphs were rejected as circular.** The depth-first walk pushed
+  each resource onto a shared stack and never popped it, so any resource reached by two
+  branches - the shared tail of a diamond, for instance - looked like a cycle. The walk now
+  backtracks correctly, resolves each resource through an index rather than a per-dependency
+  scan, and reports the cycle members in path order.
+- **#5 — The `<params=Name>` token was never expanded.** `Expand-Parameters` had no
+  production caller, read its list values from the caller's scope, and reported a parameter
+  defined as an empty string as missing. Resource properties now resolve parameter tokens
+  before string interpolation, so a token keeps the parameter's type. An unresolvable token
+  fails that one resource rather than aborting the run. A one-entry list is expanded
+  element-wise too, where it was previously routed to the scalar branch and stringified.
+- **Array-typed resource properties were flattened into a string.** `Expand-HashTable`
+  recognised a collection only by the ``List`1`` type name, so a plain array reached
+  `ExpandString` and collapsed into `"System.Collections.Hashtable ..."`. Any array now
+  expands element-wise, and a property such as `AzDoGitPermission`'s `Permissions` binds
+  again.
+- **#16 — The built module exported nothing.** The seven public commands are advanced
+  functions but were listed under `CmdletsToExport` with `FunctionsToExport` empty, so no
+  entry point was available after `Import-Module`. `VariablesToExport = '*'` also leaked the
+  module's internal `$references`, `$variables` and `$parameters` into the caller's session,
+  and `IconUri` pointed at a GitHub `/blob/` page rather than the image. All four are fixed.
+- **#17 — `Invoke-DscPipelineRunner` ignored `-PATToken`.** `-AuthenticationType` defaulted
+  to `ManagedIdentity` independently of the token supplied, so a caller who passed a PAT
+  still went down the managed-identity path. See the breaking changes below.
+
 ### Added
 
+- `-ConfigurationRevision` on `Invoke-DscRunner` and `Invoke-DscPipelineRunner`, pinning the
+  configuration repository to a branch, tag or commit. A full 40-character SHA is verified
+  against the clone's resolved HEAD.
+- `-KeepTemporaryDirectory` on both entry points, leaving a cloned configuration in place
+  for debugging instead of removing it when the run ends.
 - Tag-driven release automation (`.github/workflows/Release.yml`). Pushing a `vX.Y.Z`
   tag (or `vX.Y.Z-preview0001` for a prerelease) validates the tag, runs the full CI
   test suite as a release gate, and publishes the module to the GitHub Release and the
@@ -13,6 +71,28 @@ All notable changes to this project will be documented in this file.
   stopped by test failures. The version is taken from the tag and baked into the
   manifest at build time. The existing CI workflows gained a `workflow_call` trigger so
   the release reuses them as its gate instead of duplicating them.
+
+### Breaking Changes — Public Parameter Contract and Parameter Resolution
+
+The next release should be a **major** version bump. The release workflow takes the version
+from the git tag, so tag accordingly.
+
+#### `Invoke-DscPipelineRunner`
+
+| Before | After |
+|---|---|
+| `-exportConfigDir` | `-ExportConfigDir` (no alias; update existing pipelines) |
+| `-AuthenticationType 'ManagedIdentity'\|'PAT'` | Removed. Supplying `-PATToken` selects the PAT parameter set; omitting it uses managed identity. |
+| `-Mode` mandatory | Optional, defaulting to `Test` |
+| `-JITToken` mandatory in the managed-identity path | Optional in both parameter sets |
+| `-PATToken` validated as `^[a-zA-Z0-9]{52}$` | Validated as `^[A-Za-z0-9]{20,120}$`, which admits the newer 84-character Azure DevOps tokens |
+
+#### `parameters('Name')`
+
+An undefined parameter now throws a terminating error naming the parameter, where it
+previously returned `$null` silently. A configuration that relied on the silent `$null` -
+so that the missing value landed in a resource property and the run applied the wrong
+configuration - must declare the parameter or stop referencing it.
 
 ### Breaking Changes — Module Renamed to `Dsc.PipelineRunner`
 

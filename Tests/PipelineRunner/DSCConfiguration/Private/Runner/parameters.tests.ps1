@@ -31,8 +31,15 @@ Describe "parameters Function Tests" -Tag Unit, Runner, Configuration {
         $result | Should -Be "Value3"
     }
 
-    It "should return $null for a non-existent key" {
-        $result = parameters -Name "NonExistentKey"
-        $result | Should -Be $null
+    It "should throw for a non-existent key, naming the parameter" {
+        # Returning $null silently meant the missing value landed in a resource property and
+        # the run applied the wrong configuration instead of reporting the mistake (#5).
+        { parameters -Name "NonExistentKey" } | Should -Throw "*Parameter 'NonExistentKey' not found*"
+    }
+
+    It "should return an empty string for a parameter defined as one" {
+        $parameters['EmptyKey'] = ''
+
+        parameters -Name "EmptyKey" | Should -Be ''
     }
 }
