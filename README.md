@@ -130,10 +130,10 @@ The pipeline runner provides a set of features applicable to all Desired State C
 
     Values come from the configuration's own `parameters` section and nowhere else — each
     parameter's `defaultValue` is the value, and there is no invocation-time override on
-    `Invoke-DscRunner`. Note the difference between the two failure shapes: a token naming a
-    parameter that was never declared throws, but a parameter declared *without* a
-    `defaultValue` is still declared, so it resolves to `$null` rather than failing. Give
-    every parameter a `defaultValue`.
+    `Invoke-DscRunner`. A parameter declared *without* a `defaultValue` has no value to
+    resolve to, so it is ignored with a warning and referencing it fails exactly as an
+    undeclared name does. Give every parameter a `defaultValue`; an empty string is a
+    legitimate one, and resolves to `''` rather than failing.
 
     __Example:__
 
