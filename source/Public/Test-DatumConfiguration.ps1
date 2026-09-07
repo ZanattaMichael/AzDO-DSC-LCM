@@ -30,8 +30,27 @@ function Test-DatumConfiguration {
     Write-Verbose "[Test-DatumConfiguration] Validating the Datum Configuration."
 
     # Validate that the Datum Configuration meets the requirements for the Datum Configuration.
+    #
+    # The settings block was named 'LCMConfigSettings' before the module was renamed from
+    # AZDO-DSC-LCM to Dsc.PipelineRunner, so two different mismatches land here: a Datum.yml
+    # that still uses the old key, and a stale module validating a current Datum.yml. A bare
+    # "property is missing" message sends people looking in the wrong file for both, so name
+    # the key to add and the module that actually ran the check.
     if ($null -eq $Datum.__Definition.PipelineRunnerSettings) {
-        throw "[Test-DatumConfiguration] The Datum Configuration does not contain the PipelineRunnerSettings property. The Datum Configuration is invalid and cannot be processed."
+
+        $loadedRunnerModule = Get-Module Dsc.PipelineRunner | Select-Object -First 1
+        $runnerModuleDescription = if ($loadedRunnerModule) {
+            "Dsc.PipelineRunner $($loadedRunnerModule.Version) loaded from '$($loadedRunnerModule.Path)'"
+        }
+        else {
+            'Dsc.PipelineRunner (version could not be determined)'
+        }
+
+        if ($null -ne $Datum.__Definition.LCMConfigSettings) {
+            throw "[Test-DatumConfiguration] The Datum Configuration uses the legacy 'LCMConfigSettings' key, which was renamed to 'PipelineRunnerSettings' when the module was renamed from AZDO-DSC-LCM to Dsc.PipelineRunner. Rename the block in Datum.yml and rename its 'AZDOLCMVersion' entry to 'PipelineRunnerVersion'. This check was run by $runnerModuleDescription."
+        }
+
+        throw "[Test-DatumConfiguration] The Datum Configuration does not contain the PipelineRunnerSettings property. Add a 'PipelineRunnerSettings' block (ConfigurationVersion, PipelineRunnerVersion, DSCResourceVersion) to the Datum.yml definition file in the configuration directory. If the error names a key you do not recognise - for example the pre-rename 'LCMConfigSettings' - an older module is being loaded than the one you expect. This check was run by $runnerModuleDescription. The Datum Configuration is invalid and cannot be processed."
     }
 
     # Validate that the Datum Configuration Versioning is the correct version. If not, throw an error.
