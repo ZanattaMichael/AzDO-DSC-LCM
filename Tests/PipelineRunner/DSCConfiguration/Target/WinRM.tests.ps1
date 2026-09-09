@@ -8,6 +8,13 @@ Describe "Actions/Target/WinRM Tests" -Tag Unit, Target {
     BeforeAll {
         $script:WinRMPath = (Get-FunctionPath 'WinRM.ps1').FullName
 
+        # New-CimSession comes from the CimCmdlets module, which ships with Windows PowerShell
+        # but is not present on the Linux/macOS PowerShell used by this CI job. Define a stub so
+        # it resolves for Get-Command / Mock to attach to.
+        function New-CimSession {
+            param($ComputerName, $Credential)
+        }
+
         Mock -CommandName New-CimSession -MockWith {
             param($ComputerName, $Credential)
             return [pscustomobject]@{ Marker = 'cim'; ComputerName = $ComputerName }

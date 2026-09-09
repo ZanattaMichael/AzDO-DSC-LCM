@@ -137,7 +137,8 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         Mock -CommandName Invoke-PreParseRules -MockWith {
             param(
                 [Parameter(Mandatory=$true)]
-                [Object[]]$Tasks
+                [Object[]]$Tasks,
+                [hashtable]$Settings
             )
 
         }

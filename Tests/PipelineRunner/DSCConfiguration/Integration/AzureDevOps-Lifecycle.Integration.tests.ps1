@@ -185,7 +185,7 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
             }
             return $Tasks
         }
-        Mock -CommandName Invoke-PreParseRules -MockWith { param([Parameter(Mandatory = $true)] [Object[]]$Tasks) }
+        Mock -CommandName Invoke-PreParseRules -MockWith { param([Parameter(Mandatory = $true)] [Object[]]$Tasks, [hashtable]$Settings) }
         Mock -CommandName Invoke-FormatTasks   -MockWith { param([Parameter(Mandatory = $true)] [Object[]]$Tasks) return $Tasks }
 
         # --- Azure DevOps authentication boundary ---------------------------------------------------

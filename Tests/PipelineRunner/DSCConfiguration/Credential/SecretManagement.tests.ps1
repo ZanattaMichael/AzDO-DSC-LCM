@@ -7,6 +7,14 @@ Describe "Actions/Credential/SecretManagement Tests" -Tag Unit, Credential {
 
     BeforeAll {
         $script:SecretManagementPath = (Get-FunctionPath 'SecretManagement.ps1').FullName
+
+        # Get-Secret comes from Microsoft.PowerShell.SecretManagement, which is not installed in
+        # this sandbox. Define a stub so it resolves for Get-Command / Mock to attach to; the real
+        # module's soft-dependency check (Get-Module -ListAvailable) is exercised separately below
+        # and is itself mocked, so this stub is never invoked for real secret storage.
+        function Get-Secret {
+            param([string]$Name, [string]$Vault)
+        }
     }
 
     It "Throws when Name is not supplied" {

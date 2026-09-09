@@ -24,6 +24,19 @@ Describe "Invoke-DscExecutable Function Tests" -Tag Unit, Actions, Engine {
 
     Context "Remote-target execution (#57 §4)" {
 
+        BeforeAll {
+            # The real Invoke-Command's -Session parameter is typed
+            # [System.Management.Automation.Runspaces.PSSession[]], a sealed class that cannot be
+            # constructed without a live remoting connection. These tests stand in a plain
+            # PSCustomObject for the session (per Invoke-DscExecutable's own -Session doc comment,
+            # which is deliberately typed [object] for exactly this reason), so shadow
+            # Invoke-Command with a loosely-typed stub, scoped to just this Context, for Mock to
+            # attach to instead of the real cmdlet's constrained parameter metadata.
+            function Invoke-Command {
+                param($Session, $ScriptBlock, $ArgumentList)
+            }
+        }
+
         It "Invokes the executable through Invoke-Command when -Session is supplied" {
             Mock -CommandName Invoke-Command -MockWith {
                 param($Session, $ScriptBlock, $ArgumentList)

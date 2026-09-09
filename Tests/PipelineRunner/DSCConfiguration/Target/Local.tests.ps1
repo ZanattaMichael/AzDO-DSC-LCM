@@ -1,7 +1,9 @@
 Describe "Actions/Target/Local Tests" -Tag Unit, Target {
 
     BeforeAll {
-        $script:LocalPath = (Get-FunctionPath 'Local.ps1').FullName
+        # 'Local.ps1' also exists under Actions/Source (a different hook); disambiguate by
+        # directory since Get-FunctionPath matches by filename across the whole repo.
+        $script:LocalPath = (Get-FunctionPath 'Local.ps1' | Where-Object { $_.Directory.Name -eq 'Target' }).FullName
     }
 
     It "Returns a non-remote session descriptor with no CimSession/PSSession" {

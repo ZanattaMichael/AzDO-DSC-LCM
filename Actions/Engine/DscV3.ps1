@@ -21,6 +21,7 @@ A hashtable with keys: Method ('Test'|'Set'|'Get'), ModuleName, Name, Property.
 An object exposing InDesiredState, RebootRequired, Message and Raw (normalized by the
 runner into a [DscMethodResult]).
 #>
+[CmdletBinding()]
 param(
     [hashtable]$Context = @{}
 )

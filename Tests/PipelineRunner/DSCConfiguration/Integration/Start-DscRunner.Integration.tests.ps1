@@ -90,7 +90,7 @@ Describe "Start-DscRunner pipeline integration" -Tag Integration {
         }
 
         Mock -CommandName Invoke-PreParseRules -MockWith {
-            param([Parameter(Mandatory = $true)] [Object[]]$Tasks)
+            param([Parameter(Mandatory = $true)] [Object[]]$Tasks, [hashtable]$Settings)
         }
 
         Mock -CommandName Invoke-FormatTasks -MockWith {

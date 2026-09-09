@@ -319,8 +319,11 @@ function Start-DscRunner {
                     # the runner's state or its audit record (#35).
                     Assert-SafeConditionExpression -Expression $preConditionExpression
 
-                    # Create a script block from the preCondition property
-                    $sbCondition = [scriptblock]::Create($preConditionExpression)
+                    # Create a script block from the preCondition property. Normalized the same
+                    # way it was validated (#57 §2 - see ConvertTo-NormalizedConditionExpression);
+                    # a no-op for anything that isn't the result()/stopProcessing() syntax, which
+                    # is rejected for preCondition anyway.
+                    $sbCondition = [scriptblock]::Create((ConvertTo-NormalizedConditionExpression -Expression $preConditionExpression))
 
                     # Invoke with the call operator (&), not dot-sourcing (.), so the block runs in a
                     # child scope. It can still read the runner's variables through dynamic scoping
@@ -521,7 +524,9 @@ function Start-DscRunner {
                 $script:currentResourceResult = $result
                 try {
                     Assert-SafeConditionExpression -Expression $task.postCondition -AllowStopProcessing
-                    $sbPostCondition = [scriptblock]::Create($task.postCondition)
+                    # result()/stopProcessing() do not parse as written - normalize the same text
+                    # that was just validated (#57 §2 - see ConvertTo-NormalizedConditionExpression).
+                    $sbPostCondition = [scriptblock]::Create((ConvertTo-NormalizedConditionExpression -Expression $task.postCondition))
                     $postConditionResult = & $sbPostCondition
                 }
                 catch {

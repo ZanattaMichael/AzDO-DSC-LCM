@@ -100,7 +100,7 @@ Describe "DSC v2 environment lifecycle through a real Invoke-DscResource" -Tag I
             }
             return $Tasks
         }
-        Mock -CommandName Invoke-PreParseRules -MockWith { param([Parameter(Mandatory = $true)] [Object[]]$Tasks) }
+        Mock -CommandName Invoke-PreParseRules -MockWith { param([Parameter(Mandatory = $true)] [Object[]]$Tasks, [hashtable]$Settings) }
         Mock -CommandName Invoke-FormatTasks   -MockWith { param([Parameter(Mandatory = $true)] [Object[]]$Tasks) return $Tasks }
 
         # NOTE: Invoke-DscResource is deliberately NOT mocked -- exercising it for real is the

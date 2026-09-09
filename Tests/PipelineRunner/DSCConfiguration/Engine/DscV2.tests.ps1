@@ -61,6 +61,16 @@ Describe "Actions/Engine/DscV2 Tests" -Tag Unit, Engine {
 
     Context "Remote-target execution (#57 §4)" {
 
+        BeforeAll {
+            # The real Invoke-DscResource on this CI image does not expose a -CimSession
+            # parameter (it is Windows-only), so a Mock body that declares it would otherwise
+            # be rejected as an unknown parameter of the real command. Shadow it with a local
+            # stub that does, scoped to just this Context.
+            function Invoke-DscResource {
+                param($Name, $ModuleName, $Method, $Property, $CimSession)
+            }
+        }
+
         It "Adds -CimSession when Context.Session.CimSession is supplied" {
             $Global:DscV2CapturedCalls.Clear()
             Mock -CommandName Invoke-DscResource -MockWith {

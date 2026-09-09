@@ -67,9 +67,14 @@ function Assert-SafeConditionExpression {
         $allowedCommands += @('result', 'stopProcessing')
     }
 
+    # `result()` / `stopProcessing()` (#57 §2) do not parse as written - see
+    # ConvertTo-NormalizedConditionExpression for why - so validate the same normalized text
+    # that Start-DscRunner will actually turn into a script block.
+    $normalizedExpression = ConvertTo-NormalizedConditionExpression -Expression $Expression
+
     $tokens = $null
     $parseErrors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseInput($Expression, [ref]$tokens, [ref]$parseErrors)
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($normalizedExpression, [ref]$tokens, [ref]$parseErrors)
 
     if ($parseErrors -and $parseErrors.Count -gt 0) {
         throw "[Dsc.PipelineRunner] Invalid 'condition' expression [$Expression]: $($parseErrors[0].Message)"
