@@ -1,6 +1,10 @@
 Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
 
     BeforeAll {
+        # Assert-SafeConditionExpression calls ConvertTo-NormalizedConditionExpression (#57 §2);
+        # dot-source it too since this test loads the function standalone rather than through the
+        # built module, where every Private function is dot-sourced together.
+        . (Get-FunctionPath 'ConvertTo-NormalizedConditionExpression.ps1').FullName
         . (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
     }
 

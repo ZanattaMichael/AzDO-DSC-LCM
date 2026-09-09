@@ -178,14 +178,17 @@ Describe "Invoke-DscRunner Function Tests" -Tag Unit, Runner {
             }
         }
 
-        It "Honours an explicit -Engine over the configuration and skips the config read" {
+        It "Honours an explicit -Engine over the configuration's Engine setting" {
             Mock -CommandName Get-PipelineRunnerSetting -MockWith { return @{ Engine = 'DscV3' } }
 
+            # The config is still read once even with an explicit -Engine (#57 §2/§3: its other
+            # keys - AllowExecutionScripts, Reboot, etc. - must still reach Start-DscRunner), but
+            # its Engine key is ignored in favor of the explicit parameter.
             Invoke-DscRunner -ConfigurationSourcePath $configDir -CacheDirectory $cacheDir -Engine 'DscV2'
             Assert-MockCalled -CommandName Start-DscRunner -Scope It -ParameterFilter {
                 $Engine -eq 'DscV2'
             }
-            Assert-MockCalled -CommandName Get-PipelineRunnerSetting -Exactly 0 -Scope It
+            Assert-MockCalled -CommandName Get-PipelineRunnerSetting -Exactly 1 -Scope It
         }
     }
 

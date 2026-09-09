@@ -15,6 +15,14 @@ Describe "Actions/Target/WinRM Tests" -Tag Unit, Target {
             param($ComputerName, $Credential)
         }
 
+        # New-PSSession IS present on this CI image (it's core PowerShell remoting), but its real
+        # -Credential parameter is typed [pscredential] - a sealed class the fake credential object
+        # used below cannot satisfy. Pester's Mock inherits the target command's real parameter
+        # metadata, so shadow it too, loosely typed, before mocking it.
+        function New-PSSession {
+            param($ComputerName, $Credential)
+        }
+
         Mock -CommandName New-CimSession -MockWith {
             param($ComputerName, $Credential)
             return [pscustomobject]@{ Marker = 'cim'; ComputerName = $ComputerName }

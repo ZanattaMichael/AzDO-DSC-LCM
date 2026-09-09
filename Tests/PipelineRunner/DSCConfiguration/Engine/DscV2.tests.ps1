@@ -9,6 +9,15 @@ Describe "Actions/Engine/DscV2 Tests" -Tag Unit, Engine {
         # parameters into a global list from the mock body and assert on them. The mock
         # body is proven to execute (the return value flows back in the tests below), and
         # a $Global: list is writable from any session state, so this is scope-proof.
+        # The real Invoke-DscResource on this CI image does not expose a -CimSession parameter
+        # (it is Windows-only), but the "Remote-target execution" Context below needs to mock a
+        # call that passes one. Pester's Mock inherits the *original* target command's parameter
+        # metadata at the time it is first mocked, so this stub must be defined - and the first
+        # Mock call made against it - before that first Mock call, not just before the later one.
+        function Invoke-DscResource {
+            param($Name, $ModuleName, $Method, $Property, $CimSession)
+        }
+
         $Global:DscV2CapturedCalls = [System.Collections.Generic.List[object]]::new()
         Mock -CommandName Invoke-DscResource -MockWith {
             param($Name, $ModuleName, $Method, $Property)
@@ -60,16 +69,6 @@ Describe "Actions/Engine/DscV2 Tests" -Tag Unit, Engine {
     }
 
     Context "Remote-target execution (#57 §4)" {
-
-        BeforeAll {
-            # The real Invoke-DscResource on this CI image does not expose a -CimSession
-            # parameter (it is Windows-only), so a Mock body that declares it would otherwise
-            # be rejected as an unknown parameter of the real command. Shadow it with a local
-            # stub that does, scoped to just this Context.
-            function Invoke-DscResource {
-                param($Name, $ModuleName, $Method, $Property, $CimSession)
-            }
-        }
 
         It "Adds -CimSession when Context.Session.CimSession is supplied" {
             $Global:DscV2CapturedCalls.Clear()

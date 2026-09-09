@@ -17,6 +17,10 @@ Hashtable with:
 .OUTPUTS
 [PSCredential]
 #>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
+    Justification = 'The password genuinely arrives as plaintext from a pipeline-provided environment ' +
+        'variable (the whole point of this action); SecureString conversion is required to build the ' +
+        'PSCredential, and the plaintext is never written to any output stream.')]
 param(
     [hashtable]$Context = @{}
 )
