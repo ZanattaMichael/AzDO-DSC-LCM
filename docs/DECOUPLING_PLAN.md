@@ -325,6 +325,17 @@ around a checkpoint file and a `-ResumeFrom` parameter, since neither engine has
 story today and a local reboot kills the runner's own process. See
 [`docs/lifecycle-scripting-and-reboot-handling.md`](./lifecycle-scripting-and-reboot-handling.md).
 
+### 5.3 Remote-target execution and credential handling (planned, not yet scheduled)
+
+A third follow-on, tracked as [issue #57](https://github.com/ZanattaMichael/Dsc.PipelineRunner/issues/57)
+§4/§5: a new `Target` action hook (`Local`/`WinRM`/`SSH`) giving both engines a remote-execution
+story for the first time, which is also the prerequisite for §5.2's remote reboot-wait plan
+(§3.4 of `docs/lifecycle-scripting-and-reboot-handling.md`). Paired with it, a new `Credential`
+action hook (`Environment`/`SecretManagement`/`Static`) so a target's connection credential and a
+DscV3 resource-property credential are *retrieved by the runner at the point they're needed*,
+by name, rather than a secret ever passing through the compiled Datum YAML on disk. See
+[`docs/remote-target-credential-handling.md`](./remote-target-credential-handling.md).
+
 ## 6. Eradicating "LCM"
 
 Every remaining live occurrence (verified by `grep -rniI LCM`) plus the intent:
