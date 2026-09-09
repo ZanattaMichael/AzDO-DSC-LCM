@@ -95,6 +95,19 @@ The pipeline runner provides a set of features applicable to all Desired State C
       type: AzureDevOpsDscNative/AzDoProjectGroup
     ```
 
+    A condition may also call the function-language accessors `parameters()`, `variables()`,
+    `reference()`, `equals()` and `not()` — an explicit allow-list; any other command
+    invocation, a variable assignment, or a method call is still rejected. Unlike a bare
+    comparison, `parameters()`/`reference()` throw on a missing key or reference rather than
+    silently resolving to `$null`, so a typo fails just that resource instead of skipping it
+    unnoticed:
+
+    ```yaml
+    - name: CON Board Administrators
+      condition: (parameters('Environment')) -eq 'Prod' -and (variables('ProjectWorkBoardsStatus')) -eq 'enabled'
+      type: AzureDevOpsDscNative/AzDoProjectGroup
+    ```
+
 - __postExecutionScript__: This feature triggers a script after the resource has been executed. It can be used to perform additional operations or clean-up tasks following the resource's execution. This is helpful for managing state changes or handling post-execution logic.
 
     __Example:__

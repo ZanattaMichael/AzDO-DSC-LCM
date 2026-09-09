@@ -26,8 +26,9 @@ Concretely:
   runs on the build agent and, through the applied resources, on every managed node.
 - Resource `condition` and `postExecutionScript` fields are also evaluated as PowerShell.
   Conditions are constrained to side-effect-free predicates (they may not invoke commands,
-  assign variables, or call methods — see issue #35), but `postExecutionScript` is
-  imperative by design and is **not** constrained.
+  assign variables, or call methods, other than the allow-listed `parameters()`,
+  `variables()`, `reference()`, `equals()` and `not()` accessors — see issues #35 and #57),
+  but `postExecutionScript` is imperative by design and is **not** constrained.
 
 ### What this means for operators
 

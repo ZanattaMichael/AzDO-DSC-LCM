@@ -21,6 +21,30 @@ Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
         It "allows logical operators and grouping" {
             { Assert-SafeConditionExpression -Expression '(1 -eq 1) -and ($x -ne 2)' } | Should -Not -Throw
         }
+
+        It "allows a bare parameters() call" {
+            { Assert-SafeConditionExpression -Expression "parameters('Environment')" } | Should -Not -Throw
+        }
+
+        It "allows a bare variables() call" {
+            { Assert-SafeConditionExpression -Expression "variables('ProjectWorkBoardsStatus')" } | Should -Not -Throw
+        }
+
+        It "allows a bare reference() call" {
+            { Assert-SafeConditionExpression -Expression "reference('Configuration Git Repository')" } | Should -Not -Throw
+        }
+
+        It "allows equals() combining parameters() and variables()" {
+            { Assert-SafeConditionExpression -Expression "equals(parameters('Environment'), variables('ProjectWorkBoardsStatus'))" } | Should -Not -Throw
+        }
+
+        It "allows not() wrapping equals()" {
+            { Assert-SafeConditionExpression -Expression "not(equals(variables('ProjectWorkBoardsStatus'), 'disabled'))" } | Should -Not -Throw
+        }
+
+        It "allows the whitelisted functions mixed with ordinary operators" {
+            { Assert-SafeConditionExpression -Expression "(parameters('Environment') -eq 'Prod') -and (variables('ProjectWorkBoardsStatus') -eq 'enabled')" } | Should -Not -Throw
+        }
     }
 
     Context "rejected side effects" {
@@ -32,6 +56,16 @@ Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
 
         It "rejects a command invocation nested in an expression" {
             { Assert-SafeConditionExpression -Expression '(Get-Item C:\).Name -eq ''x''' } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "rejects a non-whitelisted command nested inside an allowed function call" {
+            { Assert-SafeConditionExpression -Expression "equals(Get-Item C:\, 'x')" } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "rejects stopProcessing(), which is not on the condition allow-list" {
+            { Assert-SafeConditionExpression -Expression "parameters('X'); stopProcessing" } |
                 Should -Throw '*command invocation*'
         }
 

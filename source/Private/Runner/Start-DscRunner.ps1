@@ -250,22 +250,37 @@ function Start-DscRunner {
                 continue
             }
 
-            # Evaluate the Condition script block if it exists, and skip the task if the condition returns false
+            # Evaluate the Condition script block if it exists, and skip the task if the condition returns false.
+            # The function-language accessors permitted by Assert-SafeConditionExpression
+            # (parameters()/variables()/reference()) are designed to throw on a missing
+            # key/reference; wrap evaluation in the same per-resource try/catch used elsewhere in
+            # this loop so a throwing condition fails only this resource instead of aborting the
+            # rest of the file.
             if ($null -ne $task.Condition) {
 
-                # A condition is a predicate, not a program: reject any command, assignment or
-                # method call before it runs, so configuration code cannot use a condition to
-                # mutate the runner's state or its audit record (#35).
-                Assert-SafeConditionExpression -Expression $task.Condition
+                try {
+                    # A condition is a predicate, not a program: reject any command, assignment or
+                    # method call before it runs, so configuration code cannot use a condition to
+                    # mutate the runner's state or its audit record (#35).
+                    Assert-SafeConditionExpression -Expression $task.Condition
 
-                # Create a script block from the condition property
-                $sbCondition = [scriptblock]::Create($task.Condition)
+                    # Create a script block from the condition property
+                    $sbCondition = [scriptblock]::Create($task.Condition)
 
-                # Invoke with the call operator (&), not dot-sourcing (.), so the block runs in a
-                # child scope. It can still read the runner's variables through dynamic scoping
-                # (which is all the example configurations need), but any assignment it makes stays
-                # local instead of overwriting Start-DscRunner's own state (#35).
-                if ((& $sbCondition) -eq $false) {
+                    # Invoke with the call operator (&), not dot-sourcing (.), so the block runs in a
+                    # child scope. It can still read the runner's variables through dynamic scoping
+                    # (which is all the example configurations need), but any assignment it makes stays
+                    # local instead of overwriting Start-DscRunner's own state (#35).
+                    $conditionResult = & $sbCondition
+                }
+                catch {
+                    Write-Error "[Start-DscRunner] Could not evaluate the condition of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
+                    & $recordResult $task.type $task.name 'FAIL' $resourceStopwatch.ElapsedMilliseconds $_.Exception.Message
+                    Write-Information ("[{0}/{1}] FAIL {2} ({3}ms) - {4}" -f $TaskCounter, $totalTasks, $resourceKey, $resourceStopwatch.ElapsedMilliseconds, $_.Exception.Message) -Tags $infoTag
+                    continue
+                }
+
+                if ($conditionResult -eq $false) {
 
                     Write-Verbose "Skipping resource due to condition: [$resourceKey]"
                     & $recordResult $task.type $task.name 'SKIP' $resourceStopwatch.ElapsedMilliseconds "Resource skipped due to condition {$($task.Condition)}."

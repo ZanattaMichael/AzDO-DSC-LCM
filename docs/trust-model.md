@@ -22,9 +22,15 @@ Datum merges YAML into per-node configuration, but the runner does not stop at d
    script blocks and evaluated:
    - **`condition`** is validated as a *side-effect-free predicate* before it runs
      (`Assert-SafeConditionExpression`, issue #35). It may read variables and properties
-     and compare them, but it may not invoke commands, assign variables, or call methods.
-     It is also run with the call operator (`&`) in a child scope, so it cannot rewrite the
-     runner's own state.
+     and compare them, and it may call the function-language accessors `parameters()`,
+     `variables()`, `reference()`, `equals()` and `not()` (issue #57) — an explicit
+     allow-list; every other command invocation, a variable assignment, or a method call is
+     still rejected, including a disallowed command nested inside an allowed call (e.g.
+     `equals(Get-Item C:\, 'x')`). `parameters()`/`reference()` are designed to throw on a
+     missing key/reference; a condition that throws fails only that resource, the same
+     per-resource try/catch → `FAIL` → continue pattern used elsewhere in the resource loop,
+     rather than aborting the rest of the file. It is also run with the call operator (`&`)
+     in a child scope, so it cannot rewrite the runner's own state.
    - **`postExecutionScript`** is imperative by design (it exists to call control verbs
      such as `Stop-TaskProcessing`) and is **not** constrained. It runs in a child scope,
      so it cannot silently rewrite the runner's locals, but it can execute arbitrary code.
