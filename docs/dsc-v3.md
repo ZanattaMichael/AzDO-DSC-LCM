@@ -102,3 +102,16 @@ is not a DSC v3 identifier instead of leaving you with an opaque non-zero exit f
 document with `ConvertTo-DscV3ConfigurationDocument` from a compiled-style resource list and
 feeds it to a real `dsc config get`. A non-zero exit fails the build, so DSC v3 compliance is
 verified against the actual engine on every push and pull request.
+
+## Configuration functions (planned)
+
+DSC v3 configuration documents have their own native function language
+(`[functionName(arg1, arg2)]` — `envvar()`, `resourceId()`, `concat()`, its own document-scoped
+`parameters()`/`variables()`, and more), separate from the runner's own `$(parameters(...))`
+function surface described in `Assert-SafeConditionExpression.ps1` and
+`source/Private/Runner/*.ps1`. Handling that syntax, and the whole-document
+(`dsc config get|test|set`) apply path it requires, is not yet implemented — see
+[`docs/dsc-v3-config-functions.md`](./dsc-v3-config-functions.md) for the design plan and the
+research into whether a combined multi-resource configuration can be applied as a unit under
+DSC v2 (it cannot, by this project's "no LCM" design) versus DSC v3 (`dsc config`, additive to
+today's per-resource engine).

@@ -298,6 +298,20 @@ Engines load through the `Actions/` loader (§3A) but honor a strict typed contr
 This keeps the loop, rules, reporting, and connect/source actions identical across
 engines — only the selected `Actions/Engine/` file changes.
 
+### 5.1 DSC v3 configuration functions and whole-document apply (planned, not yet scheduled)
+
+Follow-on work, not yet assigned a phase number: DSC v3 configuration documents carry their own
+native function language (`[functionName(...)]`) that is distinct from the runner's own
+`$(parameters(...))`/`condition` function surface, and today a `[...]`-syntax value in a compiled
+configuration is silently passed through unevaluated to either engine. Evaluating it natively
+requires calling `dsc config get|test|set --file` (whole-document apply) rather than today's
+per-resource `dsc resource <verb>`, since only `dsc config` runs DSC v3's function resolver. See
+[`docs/dsc-v3-config-functions.md`](./dsc-v3-config-functions.md) for the detection/handling plan,
+the whole-document engine design and its trade-offs, and the research finding that a combined
+multi-resource apply has no DSC v2 equivalent under this project's "no LCM" architecture (§1, §6) —
+it stays resource-by-resource via `Invoke-DscResource`, while DSC v3 gains an additive
+whole-document engine alongside the existing per-resource one.
+
 ## 6. Eradicating "LCM"
 
 Every remaining live occurrence (verified by `grep -rniI LCM`) plus the intent:
