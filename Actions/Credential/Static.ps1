@@ -18,10 +18,7 @@ Hashtable with:
 [PSCredential]
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
-    Justification = 'This is the Static credential action: the password already arrives as plaintext ' +
-        'in the context (that is what "static" means here - hence the Write-Warning below on every ' +
-        'use), so SecureString conversion is required to build the PSCredential and the plaintext is ' +
-        'never written to any output stream.')]
+    Justification = 'This is the Static credential action: the password already arrives as plaintext in the context (that is what "static" means here - hence the Write-Warning below on every use), so SecureString conversion is required to build the PSCredential and the plaintext is never written to any output stream.')]
 param(
     [hashtable]$Context = @{}
 )
