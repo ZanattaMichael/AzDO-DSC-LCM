@@ -25,7 +25,14 @@ Comparisons, logical operators, variable reads and property access (for example
 The check runs before the condition is executed, so a rejected condition never runs.
 
 .PARAMETER Expression
-The raw condition string taken from a resource's `condition` key.
+The raw condition string taken from a resource's `condition`/`preCondition` key.
+
+.PARAMETER AllowStopProcessing
+Additionally allow-lists the `result` and `stopProcessing` function-language accessors
+(#57 §2). Reserved for `postCondition`, which unlike a plain `condition`/`preCondition` is
+allowed to read the engine's result and request that the run stop after this resource -
+never pass this switch when validating a `condition`/`preCondition`, which must stay a
+side-effect-free predicate (#35).
 
 .EXAMPLE
 Assert-SafeConditionExpression -Expression "$ProjectEnsure -eq 'Present'"
@@ -44,13 +51,21 @@ function Assert-SafeConditionExpression {
     param (
         [Parameter(Mandatory)]
         [AllowEmptyString()]
-        [string] $Expression
+        [string] $Expression,
+
+        [switch] $AllowStopProcessing
     )
 
     # The function-language accessors are pure, side-effect-free reads/comparisons (they throw
     # on a missing key rather than mutate state), so they are allowed as command invocations
     # inside a condition. Everything else stays rejected.
     $allowedCommands = @('parameters', 'variables', 'reference', 'equals', 'not')
+
+    # postCondition only (#57 §2): result() is a pure read of the engine outcome, but
+    # stopProcessing() is a deliberate, narrowly-scoped side effect - see stopProcessing.ps1.
+    if ($AllowStopProcessing) {
+        $allowedCommands += @('result', 'stopProcessing')
+    }
 
     $tokens = $null
     $parseErrors = $null

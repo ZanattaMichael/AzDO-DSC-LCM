@@ -84,4 +84,37 @@ Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
                 Should -Throw "*Invalid 'condition' expression*"
         }
     }
+
+    Context "-AllowStopProcessing (postCondition only, #57 §2)" {
+
+        It "still rejects stopProcessing() without the switch" {
+            { Assert-SafeConditionExpression -Expression 'stopProcessing()' } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "still rejects result() without the switch" {
+            { Assert-SafeConditionExpression -Expression 'result().InDesiredState' } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "allows stopProcessing() with the switch" {
+            { Assert-SafeConditionExpression -Expression 'stopProcessing()' -AllowStopProcessing } |
+                Should -Not -Throw
+        }
+
+        It "allows result() with the switch" {
+            { Assert-SafeConditionExpression -Expression 'result().InDesiredState' -AllowStopProcessing } |
+                Should -Not -Throw
+        }
+
+        It "still rejects an unrelated command even with the switch" {
+            { Assert-SafeConditionExpression -Expression 'Stop-TaskProcessing' -AllowStopProcessing } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "still rejects a variable assignment even with the switch" {
+            { Assert-SafeConditionExpression -Expression '$x = 1' -AllowStopProcessing } |
+                Should -Throw '*variable assignment*'
+        }
+    }
 }

@@ -63,7 +63,14 @@ function Start-DscRunner {
         [String] $ReportPath = $null, # Optional parameter for specifying a report path
         [string] $Engine = 'DscV2', # Execution engine action (Actions/Engine/<Engine>.ps1). 'Auto' opts in to detection; default is Invoke-DscResource.
         [string] $EngineVersion, # Optional resource version hint that biases 'Auto' engine selection by major version.
-        [scriptblock] $EngineAction # Optional inline engine override; takes precedence over -Engine.
+        [scriptblock] $EngineAction, # Optional inline engine override; takes precedence over -Engine.
+
+        # Resolved PipelineRunnerSettings (#57 §2/§3/§4), e.g. AllowExecutionScripts, Reboot,
+        # Target. Invoke-DscRunner resolves this once from Datum.yml (pre-compile, since it is
+        # not present in a compiled per-node YAML file) and passes it through; a direct caller
+        # of Start-DscRunner may also supply it. Defaults are applied throughout when absent, so
+        # every key stays optional and today's behavior is unchanged when this is not supplied.
+        [hashtable] $RunnerSettings = @{}
     )
 
     # Informational output is the pipeline log's signal channel; make it visible by default
@@ -96,6 +103,23 @@ function Start-DscRunner {
     # that keeps the two in lock-step.
     $script:StopTaskProcessing = $false
 
+    # #57 §4: sessions opened by a Target action, cached per (TargetAction, ComputerName,
+    # CredentialKey) so multiple resources aimed at the same remote target reuse one
+    # connection instead of opening a fresh CimSession/PSSession per resource. Closed in the
+    # finally block below regardless of how the run ends.
+    $sessionCache = [System.Collections.Generic.Dictionary[string, object]]::new([System.StringComparer]::OrdinalIgnoreCase)
+
+    # #57 §3: reboot policy. 'Fail' (default) stops the run when a local Set reports
+    # RebootRequired; 'Ignore' continues without restarting. A remote target always restarts
+    # and waits (Restart-Computer -Wait) regardless of this setting, since the runner is not
+    # itself what needs to come back up.
+    $rebootPolicy = if ($RunnerSettings -and -not [string]::IsNullOrWhiteSpace([string]$RunnerSettings['Reboot'])) { [string]$RunnerSettings['Reboot'] } else { 'Fail' }
+
+    # #57 §4: the file-level default Target action; a resource may override it with its own
+    # 'target' block. 'Local' (today's only behavior) is the default so an unmodified
+    # configuration's execution is unchanged.
+    $defaultTargetAction = if ($RunnerSettings -and -not [string]::IsNullOrWhiteSpace([string]$RunnerSettings['Target'])) { [string]$RunnerSettings['Target'] } else { 'Local' }
+
     # Determine the file extension of the provided FilePath
     $fileExtension = [System.IO.Path]::GetExtension($FilePath)
     Write-Verbose "File extension determined: $fileExtension"
@@ -127,6 +151,16 @@ function Start-DscRunner {
     $recordResult = {
         param($ResourceType, $InstanceName, $Status, $DurationMs, $ErrorMessage)
 
+        # #57 §3/§4: Target/ComputerName/RebootRequired are read from the enclosing loop's
+        # variables (this scriptblock is invoked with & from inside the loop, same as
+        # $FilePath/$nodeName above, so it sees them by the same dynamic-scoping rule) rather
+        # than as parameters, so every existing call site keeps working unchanged. They may be
+        # unset at call sites that record a result before target resolution runs (e.g. a
+        # preCondition failure) - PowerShell reads an unset variable as $null, handled below.
+        $recordedTarget       = $targetAction
+        $recordedComputerName = if ($session) { $session.ComputerName } else { $null }
+        $recordedReboot       = if ($result) { [bool]$result.RebootRequired } else { $false }
+
         $record = [pscustomobject]@{
             NodeName          = $nodeName
             ResourceType      = $ResourceType
@@ -135,6 +169,9 @@ function Start-DscRunner {
             Status            = $Status
             DurationMs        = $DurationMs
             ErrorMessage      = $ErrorMessage
+            Target            = $recordedTarget
+            ComputerName      = $recordedComputerName
+            RebootRequired    = $recordedReboot
         }
 
         $key = '{0}|{1}|{2}' -f $FilePath, $ResourceType, $InstanceName
@@ -216,7 +253,7 @@ function Start-DscRunner {
     Write-Information "--> Processing PreParse Rules:" -Tags $infoTag
 
     # Invoke the PreParse the rules to process the tasks before formatting them
-    Invoke-PreParseRules -Tasks $pipeline.resources
+    Invoke-PreParseRules -Tasks $pipeline.resources -Settings $RunnerSettings
 
     # Invoke the Format Tasks Rules
     Write-Information "--> Processing Formatting Tasks:" -Tags $infoTag
@@ -239,6 +276,12 @@ function Start-DscRunner {
             $resourceKey = "$($task.type)/$($task.name)"
             $resourceStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
+            # Reset per-resource state so a value from a previous iteration is never
+            # misattributed to this one (#57 §3/§4 - read by $recordResult above).
+            $targetAction = $defaultTargetAction
+            $session = $null
+            $result = $null
+
             Write-Verbose "Processing resource: [$resourceKey]"
 
             # If the StopTaskProcessing variable is set to true, stop processing the tasks
@@ -256,16 +299,28 @@ function Start-DscRunner {
             # key/reference; wrap evaluation in the same per-resource try/catch used elsewhere in
             # this loop so a throwing condition fails only this resource instead of aborting the
             # rest of the file.
-            if ($null -ne $task.Condition) {
+            # #57 §2: 'preCondition' is the current name; 'condition' is kept as a back-compat
+            # alias (with a one-line deprecation warning) so an existing configuration keeps
+            # working unchanged. preCondition wins when a resource somehow carries both.
+            $preConditionExpression = $null
+            if ($null -ne $task.preCondition) {
+                $preConditionExpression = $task.preCondition
+            }
+            elseif ($null -ne $task.Condition) {
+                Write-Warning "[Start-DscRunner] Resource [$resourceKey] uses the deprecated 'condition' key; rename it to 'preCondition'."
+                $preConditionExpression = $task.Condition
+            }
+
+            if ($null -ne $preConditionExpression) {
 
                 try {
-                    # A condition is a predicate, not a program: reject any command, assignment or
-                    # method call before it runs, so configuration code cannot use a condition to
-                    # mutate the runner's state or its audit record (#35).
-                    Assert-SafeConditionExpression -Expression $task.Condition
+                    # A preCondition is a predicate, not a program: reject any command, assignment
+                    # or method call before it runs, so configuration code cannot use it to mutate
+                    # the runner's state or its audit record (#35).
+                    Assert-SafeConditionExpression -Expression $preConditionExpression
 
-                    # Create a script block from the condition property
-                    $sbCondition = [scriptblock]::Create($task.Condition)
+                    # Create a script block from the preCondition property
+                    $sbCondition = [scriptblock]::Create($preConditionExpression)
 
                     # Invoke with the call operator (&), not dot-sourcing (.), so the block runs in a
                     # child scope. It can still read the runner's variables through dynamic scoping
@@ -274,7 +329,7 @@ function Start-DscRunner {
                     $conditionResult = & $sbCondition
                 }
                 catch {
-                    Write-Error "[Start-DscRunner] Could not evaluate the condition of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
+                    Write-Error "[Start-DscRunner] Could not evaluate the preCondition of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
                     & $recordResult $task.type $task.name 'FAIL' $resourceStopwatch.ElapsedMilliseconds $_.Exception.Message
                     Write-Information ("[{0}/{1}] FAIL {2} ({3}ms) - {4}" -f $TaskCounter, $totalTasks, $resourceKey, $resourceStopwatch.ElapsedMilliseconds, $_.Exception.Message) -Tags $infoTag
                     continue
@@ -282,9 +337,9 @@ function Start-DscRunner {
 
                 if ($conditionResult -eq $false) {
 
-                    Write-Verbose "Skipping resource due to condition: [$resourceKey]"
-                    & $recordResult $task.type $task.name 'SKIP' $resourceStopwatch.ElapsedMilliseconds "Resource skipped due to condition {$($task.Condition)}."
-                    Write-Information ("[{0}/{1}] SKIP {2} (condition)" -f $TaskCounter, $totalTasks, $resourceKey) -Tags $infoTag
+                    Write-Verbose "Skipping resource due to preCondition: [$resourceKey]"
+                    & $recordResult $task.type $task.name 'SKIP' $resourceStopwatch.ElapsedMilliseconds "Resource skipped due to preCondition {$preConditionExpression}."
+                    Write-Information ("[{0}/{1}] SKIP {2} (preCondition)" -f $TaskCounter, $totalTasks, $resourceKey) -Tags $infoTag
                     continue
 
                 }
@@ -310,12 +365,78 @@ function Start-DscRunner {
             try {
                 $Property = Expand-HashTable -InputHashTable (Expand-Parameters -InputHashTable $task.properties)
                 Write-Verbose "Replaced parameters and variables in properties with actual values"
+
+                # #57 §7: a declarative 'resourceCredential' block resolves a credential through
+                # the Credential hook and injects it into the resource's own properties (e.g. a
+                # SqlServerDsc resource's -Credential), so the credential never needs to appear in
+                # the configuration itself. Runs even when AllowExecutionScripts is off - it is
+                # declarative, not a script, so the execution-scripts gate does not apply to it.
+                if ($null -ne $task.resourceCredential) {
+                    $credentialContext = $task.resourceCredential
+                    $credentialActionName = if (-not [string]::IsNullOrWhiteSpace([string]$credentialContext.action)) { [string]$credentialContext.action } else { 'Environment' }
+                    $resolvedResourceCredential = Invoke-Action -Hook Credential -Name $credentialActionName -Context $credentialContext
+                    $targetPropertyName = if (-not [string]::IsNullOrWhiteSpace([string]$credentialContext.propertyName)) { [string]$credentialContext.propertyName } else { 'Credential' }
+                    $Property[$targetPropertyName] = $resolvedResourceCredential
+                    Write-Verbose "Resolved resourceCredential via Credential action '$credentialActionName' into property '$targetPropertyName' for resource: [$resourceKey]"
+                }
             }
             catch {
                 Write-Error "[Start-DscRunner] Could not resolve the properties of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
                 & $recordResult $task.type $task.name 'FAIL' $resourceStopwatch.ElapsedMilliseconds $_.Exception.Message
                 Write-Information ("[{0}/{1}] FAIL {2} ({3}ms) - {4}" -f $TaskCounter, $totalTasks, $resourceKey, $resourceStopwatch.ElapsedMilliseconds, $_.Exception.Message) -Tags $infoTag
                 continue
+            }
+
+            # #57 §4: resolve this resource's execution target. A per-resource 'target' block
+            # overrides the file-level default (PipelineRunnerSettings.Target / 'Local'). Session
+            # objects are cached per (action, computer, credential) so resources sharing a target
+            # reuse one connection; 'Local' never invokes the Target hook at all, so an
+            # unmodified configuration's local-only execution path is untouched.
+            $targetAction = if ($task.target -and -not [string]::IsNullOrWhiteSpace([string]$task.target.action)) { [string]$task.target.action } else { $defaultTargetAction }
+            $session = $null
+
+            if ($targetAction -ne 'Local') {
+                try {
+                    $targetCredential = $null
+                    $credentialCacheKey = ''
+                    if ($task.target.credential) {
+                        $tCred = $task.target.credential
+                        $tCredAction = if (-not [string]::IsNullOrWhiteSpace([string]$tCred.action)) { [string]$tCred.action } else { 'Environment' }
+                        $targetCredential = Invoke-Action -Hook Credential -Name $tCredAction -Context $tCred
+                        $credentialCacheKey = "$tCredAction|$($tCred.Name)|$($tCred.UserNameVariable)"
+                    }
+
+                    $targetContext = @{
+                        ComputerName = [string]$task.target.computerName
+                        Engine       = $resolvedEngine
+                        Credential   = $targetCredential
+                    }
+
+                    $sessionCacheKey = "$targetAction|$($targetContext.ComputerName)|$credentialCacheKey"
+                    if (-not $sessionCache.ContainsKey($sessionCacheKey)) {
+                        Write-Verbose "Opening new '$targetAction' session for target: [$($targetContext.ComputerName)]"
+                        $sessionCache[$sessionCacheKey] = Invoke-Action -Hook Target -Name $targetAction -Context $targetContext
+                    }
+                    $session = $sessionCache[$sessionCacheKey]
+                }
+                catch {
+                    Write-Error "[Start-DscRunner] Could not establish the '$targetAction' target for resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
+                    & $recordResult $task.type $task.name 'FAIL' $resourceStopwatch.ElapsedMilliseconds $_.Exception.Message
+                    Write-Information ("[{0}/{1}] FAIL {2} ({3}ms) - {4}" -f $TaskCounter, $totalTasks, $resourceKey, $resourceStopwatch.ElapsedMilliseconds, $_.Exception.Message) -Tags $infoTag
+                    continue
+                }
+            }
+            if ($session) { $engineArgs.Session = $session } else { $engineArgs.Remove('Session') }
+
+            # #57 §2: preExecutionScript runs immediately before the Test/Set evaluation.
+            # Mirrors postExecutionScript's execution model (invoked with &, not dot-sourced, so
+            # it cannot rewrite Start-DscRunner's own locals - #35) but runs first, so it can
+            # prepare state the resource's Test/Set depends on. Gated by PipelineRunnerSettings.
+            # AllowExecutionScripts at PreParse time (Test-ExecutionScriptsAllowed.ps1); if the
+            # run got this far with a preExecutionScript present, execution scripts are allowed.
+            if ($null -ne $task.preExecutionScript) {
+                $sbPreExecutionScript = [scriptblock]::Create($task.preExecutionScript)
+                & $sbPreExecutionScript
             }
 
             # Execute the 'Test' method to determine if the state is as desired.
@@ -343,9 +464,36 @@ function Start-DscRunner {
             elseif ($Mode -eq "Set") {
 
                 try {
-                    $null = Invoke-EngineAction -Method 'Set' -ModuleName $module -Name $resourceType -Property $Property @engineArgs
+                    $result = Invoke-EngineAction -Method 'Set' -ModuleName $module -Name $resourceType -Property $Property @engineArgs
                     Write-Verbose "Executed 'Set' method to make changes: [$resourceKey]"
                     $resourceStatus = 'OK'
+
+                    # #57 §3: reboot handling. A remote target restarts itself and waits for
+                    # PowerShell to come back before the run continues, regardless of the reboot
+                    # policy - it is the target, not the runner's own host, that comes back up.
+                    # A local target cannot safely do this in-process (restarting the machine the
+                    # runner itself is on would kill the run mid-file), so it fails the resource
+                    # and stops the rest of the file unless the policy explicitly says to ignore it.
+                    if ($result.RebootRequired) {
+                        if ($session -and $session.IsRemote) {
+                            Write-Information "Reboot required on remote target [$($session.ComputerName)] after resource [$resourceKey]; restarting and waiting..." -Tags $infoTag
+                            $restartParams = @{ ComputerName = $session.ComputerName; Wait = $true; Force = $true; ErrorAction = 'Stop' }
+                            if ($task.target.credential -and $session.PSSession -and $session.PSSession.Credential) {
+                                $restartParams.Credential = $session.PSSession.Credential
+                            }
+                            Restart-Computer @restartParams
+                            Write-Verbose "Remote target [$($session.ComputerName)] is back; continuing."
+                        }
+                        elseif ($rebootPolicy -eq 'Ignore') {
+                            Write-Information "Resource [$resourceKey] requires a reboot; PipelineRunnerSettings.Reboot is 'Ignore', continuing without restarting." -Tags $infoTag
+                        }
+                        else {
+                            $resourceStatus = 'FAIL'
+                            $resourceError = "Resource [$resourceKey] requires a reboot to complete, and the local host cannot safely restart itself mid-run. Set PipelineRunnerSettings.Reboot: Ignore to continue without restarting, or target this resource at a remote computer (#57 §4) to have the runner restart it and wait automatically."
+                            Write-Error "[Start-DscRunner] $resourceError" -ErrorAction Continue
+                            $script:StopTaskProcessing = $true
+                        }
+                    }
                 }
                 catch {
                     # -ErrorAction Continue keeps this non-terminating even when a caller
@@ -361,6 +509,36 @@ function Start-DscRunner {
                 Write-Verbose "Change needed, but mode is not set to 'Set': [$resourceKey]"
                 $resourceStatus = 'FAIL'
                 $resourceError = $result.Message
+            }
+
+            # #57 §2: postCondition runs after Test/Set (before postExecutionScript). Unlike
+            # preCondition it is not a skip - a $false postCondition marks the resource FAIL
+            # regardless of what the engine itself reported, since it is meant to assert
+            # something about the outcome (e.g. via result()) that the engine's own
+            # InDesiredState does not capture. -AllowStopProcessing permits it (and only it) to
+            # call stopProcessing() as well as read result().
+            if ($null -ne $task.postCondition) {
+                $script:currentResourceResult = $result
+                try {
+                    Assert-SafeConditionExpression -Expression $task.postCondition -AllowStopProcessing
+                    $sbPostCondition = [scriptblock]::Create($task.postCondition)
+                    $postConditionResult = & $sbPostCondition
+                }
+                catch {
+                    Write-Error "[Start-DscRunner] Could not evaluate the postCondition of resource [$resourceKey]: $($_.Exception.Message)" -ErrorAction Continue
+                    $resourceStatus = 'FAIL'
+                    $resourceError = $_.Exception.Message
+                    $postConditionResult = $null
+                }
+                finally {
+                    $script:currentResourceResult = $null
+                }
+
+                if ($postConditionResult -eq $false) {
+                    Write-Verbose "Resource failed postCondition: [$resourceKey]"
+                    $resourceStatus = 'FAIL'
+                    $resourceError = "Resource failed postCondition {$($task.postCondition)}."
+                }
             }
 
             #
@@ -413,6 +591,16 @@ function Start-DscRunner {
 
         $runStopwatch.Stop()
         $ProgressPreference = $previousProgressPreference
+
+        # #57 §4: close every session this run opened, regardless of how the run ended.
+        foreach ($cachedSession in $sessionCache.Values) {
+            if ($cachedSession.CimSession) {
+                Remove-CimSession -CimSession $cachedSession.CimSession -ErrorAction SilentlyContinue
+            }
+            if ($cachedSession.PSSession) {
+                Remove-PSSession -Session $cachedSession.PSSession -ErrorAction SilentlyContinue
+            }
+        }
 
         # Summarize from the deduplicated records.
         $passCount = @($results | Where-Object { $_.Status -eq 'OK' }).Count

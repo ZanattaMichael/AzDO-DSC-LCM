@@ -737,4 +737,247 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         }
     }
 
+    Context "postCondition and stopProcessing() (#57 §2)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+            . (Get-FunctionPath 'result.ps1').FullName
+            . (Get-FunctionPath 'stopProcessing.ps1').FullName
+        }
+
+        It "marks the resource FAIL when postCondition returns false, even though the engine reports InDesiredState" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "result().InDesiredState -and `$false"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+        }
+
+        It "lets postCondition read result() from the engine's Test outcome" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "result().InDesiredState"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'OK'
+        }
+
+        It "rejects a postCondition that calls stopProcessing() indirectly through a disallowed pattern" {
+            # A postCondition is still parsed by the same AST allow-list; only 'result' and
+            # 'stopProcessing' are added on top of the ordinary condition allow-list, so an
+            # arbitrary other command is still rejected.
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "Get-Item C:\"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+        }
+
+        It "allows postCondition to call stopProcessing() and skips the remaining resources" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "stopProcessing()"
+                        }
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            $result.Status | Should -Be 'StoppedByRequest'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource2' }).Status | Should -Be 'SKIP'
+        }
+    }
+
+    Context "preExecutionScript (#57 §2)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+        }
+
+        It "runs preExecutionScript before the resource's Test evaluation" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{ ranPreExecutionScript = $false }
+                    resources  = @(
+                        @{
+                            type              = "Module/Resource"
+                            name              = "Resource1"
+                            properties        = @{ prop1 = "value1" }
+                            preExecutionScript = '$variables["ranPreExecutionScript"] = $true'
+                        }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                # By the time Test runs, preExecutionScript must already have run.
+                $variables['ranPreExecutionScript'] | Should -BeTrue
+                return @{ InDesiredState = $true; Message = 'Mocked message' }
+            }
+
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            $variables['ranPreExecutionScript'] | Should -BeTrue
+        }
+    }
+
+    Context "declarative resourceCredential (#57 §7)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+            $env:DscPipelineRunnerTestUser = 'svc-account'
+            $env:DscPipelineRunnerTestPass = 'super-secret'
+        }
+
+        AfterAll {
+            Remove-Item Env:\DscPipelineRunnerTestUser -ErrorAction SilentlyContinue
+            Remove-Item Env:\DscPipelineRunnerTestPass -ErrorAction SilentlyContinue
+        }
+
+        It "resolves resourceCredential via the Credential hook and injects it into the resource properties" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type              = "Module/Resource"
+                            name              = "Resource1"
+                            properties        = @{ prop1 = "value1" }
+                            resourceCredential = @{
+                                action           = 'Environment'
+                                UserNameVariable = 'DscPipelineRunnerTestUser'
+                                PasswordVariable  = 'DscPipelineRunnerTestPass'
+                            }
+                        }
+                    )
+                }
+            }
+
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter {
+                $Method -eq 'Test' -and $Property.Credential -is [System.Management.Automation.PSCredential] -and $Property.Credential.UserName -eq 'svc-account'
+            } -Exactly 1 -Scope It
+        }
+    }
+
+    Context "reboot handling (#57 §3)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+        }
+
+        It "fails the resource and stops the run when a local Set reports RebootRequired (default policy)" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{ type = "Module/Resource"; name = "Resource1"; properties = @{ prop1 = "value1" } }
+                        @{ type = "Module/Resource"; name = "Resource2"; properties = @{ prop2 = "value2" } }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                if ($Method -eq 'Test') { return @{ InDesiredState = $false } }
+                if ($Method -eq 'Set')  { return @{ InDesiredState = $true; RebootRequired = $true } }
+                return @{ InDesiredState = $true }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath -Mode 'Set'
+
+            $result.Status | Should -Be 'StoppedByRequest'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).RebootRequired | Should -BeTrue
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource2' }).Status | Should -Be 'SKIP'
+        }
+
+        It "continues without restarting when RunnerSettings.Reboot is 'Ignore'" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{ type = "Module/Resource"; name = "Resource1"; properties = @{ prop1 = "value1" } }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                if ($Method -eq 'Test') { return @{ InDesiredState = $false } }
+                if ($Method -eq 'Set')  { return @{ InDesiredState = $true; RebootRequired = $true } }
+                return @{ InDesiredState = $true }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath -Mode 'Set' -RunnerSettings @{ Reboot = 'Ignore' }
+
+            $result.Status | Should -Be 'Completed'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'OK'
+        }
+    }
+
 }
