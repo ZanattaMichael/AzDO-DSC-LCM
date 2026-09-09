@@ -24,11 +24,23 @@ Concretely:
 - `Invoke-DscPipelineRunner` and `Invoke-DscRunner` accept a **remote URL** as the
   configuration source, clone it, and compile it — so code from the remote repository
   runs on the build agent and, through the applied resources, on every managed node.
-- Resource `condition` and `postExecutionScript` fields are also evaluated as PowerShell.
-  Conditions are constrained to side-effect-free predicates (they may not invoke commands,
-  assign variables, or call methods, other than the allow-listed `parameters()`,
-  `variables()`, `reference()`, `equals()` and `not()` accessors — see issues #35 and #57),
-  but `postExecutionScript` is imperative by design and is **not** constrained.
+- Resource `preCondition` (formerly `condition`, still accepted as a deprecated alias),
+  `postCondition`, `preExecutionScript` and `postExecutionScript` fields are also evaluated
+  as PowerShell.
+  - `preCondition` and `postCondition` are constrained to side-effect-free predicates: they
+    may not invoke commands, assign variables, or call methods, other than the allow-listed
+    `parameters()`, `variables()`, `reference()`, `equals()` and `not()` accessors (see
+    issue #35). `postCondition` additionally allows `result()` (the just-applied resource's
+    `[DscMethodResult]`) and `stopProcessing()` (requests that the remaining resources in
+    the file be skipped) — these two are allow-listed **only** for `postCondition`, never
+    for `preCondition`, so a pre-check can never mutate run state (see issue #57).
+  - `preExecutionScript` and `postExecutionScript` are imperative by design and are **not**
+    constrained to a predicate grammar. Because of that, they only run when
+    `PipelineRunnerSettings.AllowExecutionScripts: true` is set; a configuration that
+    declares either field with the gate off (or unset) fails compilation with a
+    pre-parse error naming every offending resource, rather than silently skipping the
+    script or running it anyway. This is an explicit opt-in, not a sandbox — once enabled,
+    these scripts run with the same trust and privileges as the rest of the configuration.
 
 ### What this means for operators
 
@@ -70,6 +82,43 @@ unconditionally:
 
 None of this makes an untrusted configuration safe to run. It removes the ways the
 *transport* could be turned against a configuration you have already decided to trust.
+
+### Remote targets and credential handling
+
+`Target` (`Local`, `WinRM`, `SSH`) and `Credential` (`Environment`, `Static`,
+`SecretManagement`) actions extend the trust boundary from the build agent to whatever
+they connect to:
+
+- **Remote targets are a new trust boundary.** A resource with a non-`Local` `target`
+  opens a `CimSession`/`PSSession` to the named `ComputerName` and applies the resource
+  there. Anyone who can edit the configuration can point a resource at an arbitrary
+  reachable host and run resources against it with whatever credential is resolved for
+  that connection — the same "configuration repo is fully-trusted code" boundary above,
+  now extended over the network. Restrict which hosts are reachable from the build agent
+  and which credentials are available to it accordingly.
+- **`Credential: Static` is a development/test convenience, not a production pattern.**
+  It takes a plain-text or securestring password inline in the configuration and emits a
+  `Write-Warning` every time it is used, so its use is visible in pipeline logs. A
+  plain-text credential committed to the configuration repository is exposed to everyone
+  with read access to that repository's history.
+- **`Credential: Environment`** (the default) reads a username/password pair from two
+  named environment variables on the build agent, keeping the secret value out of the
+  configuration repository itself — but it is only as safe as the pipeline's own
+  environment-variable handling (masking, log redaction) already is.
+- **`Credential: SecretManagement`** resolves a secret by name from a registered
+  `Microsoft.PowerShell.SecretManagement` vault (`Get-Secret`), so the secret's lifecycle,
+  access control and rotation are delegated entirely to that vault backend. The runner
+  does not cache, log or persist the resolved secret beyond the in-memory `[PSCredential]`
+  used for the connection or resource.
+- **`resourceCredential`** resolves a credential the same way and injects it into the
+  named resource property (`Credential` by default) before the resource is applied. As
+  with any DSC `[PSCredential]` property, PowerShell's own `SensitiveData`/argument
+  redaction applies when the module (or `Write-Verbose`/tracing) formats it — the runner
+  does not print resolved credential values itself.
+- Sessions opened for a `target` are cached per `(target action, computer name,
+  credential)` for the duration of a single run and are always closed in the run's
+  `finally` block, including on failure, so a compromised or misbehaving resource cannot
+  leave a remote session open past the run that created it.
 
 ### Future hardening
 
