@@ -18,6 +18,10 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         $StopTaskProcessingPath = (Get-FunctionPath 'Stop-TaskProcessing.ps1').FullName
         # #35: conditions are validated as side-effect-free predicates before they run.
         $AssertSafeConditionPath = (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
+        # #57 §2: both Assert-SafeConditionExpression and Start-DscRunner itself normalize
+        # result()/stopProcessing() syntax through this helper before parsing/executing a
+        # condition; load it before either so the real call inside them resolves.
+        $ConvertToNormalizedConditionExpressionPath = (Get-FunctionPath 'ConvertTo-NormalizedConditionExpression.ps1').FullName
         # #57: the condition allow-list permits these function-language accessors, so a
         # condition that calls them needs the real implementations loaded to execute.
         $ParametersFnPath = (Get-FunctionPath 'parameters.ps1').FullName
@@ -34,6 +38,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         . (Get-FunctionPath 'ConvertTo-DscMethodResult.ps1').FullName
         . (Get-FunctionPath 'Invoke-EngineAction.ps1').FullName
 
+        . $ConvertToNormalizedConditionExpressionPath
         . $preParseFilePath
         . $getDefaultValuesPath
         . $SetVariablesPath
