@@ -143,3 +143,80 @@ remote-credential handling — depends on §4"):
 7. Docs: `README.md` action-hook table gains `Credential`; `docs/trust-model.md` gains a section
    on what a `Credential` handler is trusted to do (resolve a name to a secret in memory) and is
    not trusted to do (persist it, log it, or receive it from YAML).
+
+## 6. Worked example (illustrative — not yet implemented)
+
+Shape of the config surface once §4 (`Target`) and this document both land, following the same
+`Example Configuration/` conventions used elsewhere in the repo.
+
+`Datum.yml` — file-level defaults, same table `PipelineRunnerSettings.Source`/`Connect`/`Engine`
+already use:
+
+```yaml
+PipelineRunnerSettings:
+  ConfigurationVersion: 0.1
+  PipelineRunnerVersion: 0.1
+  DSCResourceVersion: 3.0
+  Engine: DscV3           # a file in Actions/Engine/      (default: DscV2)
+  Target: WinRM            # a file in Actions/Target/      (default: Local)
+  Credential: Environment   # a file in Actions/Credential/  (default: Environment)
+
+# Connection details for the WinRM target every resource below runs against,
+# unless a resource's own `target:` block overrides it (mixed-target files).
+target:
+  computerName: $NodeName
+  credentialRef: svcDeploy   # a *name*, resolved by the Credential handler at run time —
+                              # never the secret itself.
+```
+
+A resource file — one resource on the file-level target above, one overriding it to run
+against a different machine, and one DscV3 resource whose *property* (not the connection) needs
+its own credential:
+
+```yaml
+parameters: {}
+
+variables: {
+  ServiceName: 'MyApp',
+  DomainAccount: 'CONTOSO\\svc-myapp'
+}
+
+resources:
+
+  - name: Ensure MyApp service is running
+    type: PSDesiredStateConfiguration/Service
+    properties:
+      Name: $ServiceName
+      State: Running
+
+  - name: Ensure MyApp service runs as a domain account
+    type: PSDesiredStateConfiguration/Service
+    target:                       # per-resource override — same shape as `dependsOn`/`preCondition`
+      computerName: 'app02.contoso.com'
+      credentialRef: svcDeploy
+    properties:
+      Name: $ServiceName
+      State: Running
+      Credential:                 # resource-property credential (§3) — DscV2/CIM marshals this
+        credentialRef: svcMyAppLogon   # natively; DscV3 resolves it via the Credential handler
+                                        # immediately before building --input.
+```
+
+The corresponding `Invoke-DscRunner` call — `-CredentialContext` is handler-specific config only
+(here, nothing beyond the default `Environment` handler's own env-var convention needs supplying);
+the secrets themselves live in the agent's environment, never in the call or the YAML above:
+
+```powershell
+Invoke-DscRunner -Source Git -SourceContext @{ Url = $repo; Token = $pat } `
+                  -Target WinRM `
+                  -Credential Environment
+# Resolves credentialRef 'svcDeploy' from $env:DSCRUNNER_CREDENTIAL_SVCDEPLOY_USERNAME /
+# ..._PASSWORD, and 'svcMyAppLogon' the same way, both set as job-scoped secret variables
+# by the calling pipeline — never written into the compiled configuration on disk.
+```
+
+Swapping the file-level default to `Credential: SecretManagement` (with a vault named in
+`-CredentialContext @{ VaultName = 'CorpVault' }`) resolves the same two `credentialRef` names
+against `Get-Secret -Vault CorpVault` instead, with no change to the YAML above — the whole point
+of the handler being pluggable is that `credentialRef` names stay stable across environments while
+the retrieval mechanism behind them changes per agent.
