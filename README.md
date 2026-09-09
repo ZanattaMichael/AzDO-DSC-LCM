@@ -240,6 +240,10 @@ reporting stays engine-independent regardless of which engine ran. See
 [docs/dsc-v3.md](docs/dsc-v3.md) for the DSC v3 engine, and
 [docs/hosted-agent-dsc-v3.md](docs/hosted-agent-dsc-v3.md) for running it on a
 hosted Linux agent (bootstrap, engine selection, pipeline-native auth).
+[docs/lifecycle-scripting-and-reboot-handling.md](docs/lifecycle-scripting-and-reboot-handling.md)
+plans two follow-ons that aren't implemented yet: `preCondition`/`postCondition`/
+`preExecutionScript` and a `stopProcessing()` function-language extension, and a
+checkpoint/resume design for resources that report `RebootRequired`.
 
 ## Public Commands
 

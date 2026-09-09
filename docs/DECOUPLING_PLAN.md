@@ -312,6 +312,19 @@ multi-resource apply has no DSC v2 equivalent under this project's "no LCM" arch
 it stays resource-by-resource via `Invoke-DscResource`, while DSC v3 gains an additive
 whole-document engine alongside the existing per-resource one.
 
+### 5.2 Lifecycle scripting extensions and reboot handling (planned, not yet scheduled)
+
+A second follow-on, also not yet assigned a phase number: widening the runner's own function
+language (`parameters()`/`variables()`/`reference()`/`equals()`/`not()`) into `condition` (renamed
+`preCondition`, with a new `postCondition`) via a whitelist change to
+`Assert-SafeConditionExpression`, adding a symmetric `preExecutionScript`, and adding a
+narrowly-scoped `stopProcessing()` function usable only from `postCondition`. Alongside that, a
+plan for resources that report `RebootRequired` — today captured by the typed engine contract
+(§3B above) but discarded by `Start-DscRunner` and hardcoded `$false` by the `DscV3` engine — built
+around a checkpoint file and a `-ResumeFrom` parameter, since neither engine has a remote-target
+story today and a local reboot kills the runner's own process. See
+[`docs/lifecycle-scripting-and-reboot-handling.md`](./lifecycle-scripting-and-reboot-handling.md).
+
 ## 6. Eradicating "LCM"
 
 Every remaining live occurrence (verified by `grep -rniI LCM`) plus the intent:
