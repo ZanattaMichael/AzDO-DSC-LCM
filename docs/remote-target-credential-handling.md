@@ -160,18 +160,17 @@ PipelineRunnerSettings:
   Engine: DscV3           # a file in Actions/Engine/      (default: DscV2)
   Target: WinRM            # a file in Actions/Target/      (default: Local)
   Credential: Environment   # a file in Actions/Credential/  (default: Environment)
-
-# Connection details for the WinRM target every resource below runs against,
-# unless a resource's own `target:` block overrides it (mixed-target files).
-target:
-  computerName: $NodeName
-  credentialRef: svcDeploy   # a *name*, resolved by the Credential handler at run time —
-                              # never the secret itself.
 ```
 
-A resource file — one resource on the file-level target above, one overriding it to run
-against a different machine, and one DscV3 resource whose *property* (not the connection) needs
-its own credential:
+`Datum.yml` only ever selects *which action files run* — `Target: WinRM` names
+`Actions/Target/WinRM.ps1`, same as `Engine`/`Source`/`Connect` today. The connection details
+themselves (`computerName`, `credentialRef`) are configuration data, not settings, so — per issue
+#57 §4 — they live in the *compiled* configuration YAML alongside `parameters`/`variables`/
+`resources`, resolved per node the same way `ProjectName` already is via Datum's own lookup.
+
+A resource file — a file-level `target:` block every resource in the file runs against by
+default, one resource overriding it to run against a different machine, and one DscV3 resource
+whose *property* (not the connection) needs its own credential:
 
 ```yaml
 parameters: {}
@@ -180,6 +179,15 @@ variables: {
   ServiceName: 'MyApp',
   DomainAccount: 'CONTOSO\\svc-myapp'
 }
+
+# Connection details for the WinRM target every resource below runs against,
+# unless a resource's own `target:` block overrides it (mixed-target files).
+# `computerName` is resolved per node the same way `$ProjectName` already is;
+# `credentialRef` is a *name*, resolved by the Credential handler at run time —
+# never the secret itself.
+target:
+  computerName: $NodeName
+  credentialRef: svcDeploy
 
 resources:
 
