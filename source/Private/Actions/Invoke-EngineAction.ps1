@@ -29,6 +29,13 @@ The engine action name (a file under Actions/Engine/). Default: 'DscV2'.
 .PARAMETER EngineAction
 An inline engine scriptblock. Takes precedence over -Engine.
 
+.PARAMETER Session
+Optional remote-target session context (#57 §4), resolved once per file/resource by the
+Target action (Actions/Target/<Name>.ps1) and threaded through unchanged. Shape is
+engine-specific: DscV2.ps1 reads .CimSession (fed to Invoke-DscResource -CimSession);
+DscV3.ps1 reads .PSSession (used to wrap the dsc.exe call in Invoke-Command -Session).
+$null (the default) means "run against the local machine", today's behavior.
+
 .OUTPUTS
 [DscMethodResult]
 #>
@@ -49,7 +56,10 @@ function Invoke-EngineAction {
 
         [string]$Engine = 'DscV2',
 
-        [scriptblock]$EngineAction
+        [scriptblock]$EngineAction,
+
+        [AllowNull()]
+        [object]$Session = $null
     )
 
     $context = @{
@@ -57,6 +67,7 @@ function Invoke-EngineAction {
         ModuleName = $ModuleName
         Name       = $Name
         Property   = $Property
+        Session    = $Session
     }
 
     $raw = Invoke-Action -Hook Engine -Name $Engine -ScriptBlock $EngineAction -Context $context

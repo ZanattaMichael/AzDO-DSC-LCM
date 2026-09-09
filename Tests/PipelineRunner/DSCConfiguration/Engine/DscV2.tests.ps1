@@ -58,4 +58,37 @@ Describe "Actions/Engine/DscV2 Tests" -Tag Unit, Engine {
         $result.InDesiredState | Should -BeTrue
         $result.Raw.Prop | Should -Be 'current-value'
     }
+
+    Context "Remote-target execution (#57 §4)" {
+
+        It "Adds -CimSession when Context.Session.CimSession is supplied" {
+            $Global:DscV2CapturedCalls.Clear()
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param($Name, $ModuleName, $Method, $Property, $CimSession)
+                $Global:DscV2CapturedCalls.Add([pscustomobject]@{ CimSession = $CimSession })
+                return [pscustomobject]@{ InDesiredState = $true }
+            }
+
+            $fakeCimSession = [pscustomobject]@{ Marker = 'fake-cim-session' }
+            $null = & $script:DscV2Path -Context @{
+                Method = 'Test'; ModuleName = 'Mod'; Name = 'Res'; Property = @{}
+                Session = [pscustomobject]@{ CimSession = $fakeCimSession }
+            }
+
+            $Global:DscV2CapturedCalls[0].CimSession | Should -Be $fakeCimSession
+        }
+
+        It "Does not add -CimSession when no Session is supplied (local execution, today's default)" {
+            $Global:DscV2CapturedCalls.Clear()
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param($Name, $ModuleName, $Method, $Property, $CimSession)
+                $Global:DscV2CapturedCalls.Add([pscustomobject]@{ CimSession = $CimSession })
+                return [pscustomobject]@{ InDesiredState = $true }
+            }
+
+            $null = & $script:DscV2Path -Context @{ Method = 'Test'; ModuleName = 'Mod'; Name = 'Res'; Property = @{} }
+
+            $Global:DscV2CapturedCalls[0].CimSession | Should -BeNullOrEmpty
+        }
+    }
 }

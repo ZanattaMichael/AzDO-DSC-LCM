@@ -67,4 +67,29 @@ return "resolved:$($Context.Path)"
         }
     }
 
+    Context "Target and Credential hooks (#57 §4/§5)" {
+
+        It "Accepts 'Target' as a valid hook" {
+            $result = Invoke-Action -Hook Target -ScriptBlock { param($Context) 'target-ran' } -Context @{}
+            $result | Should -Be 'target-ran'
+        }
+
+        It "Accepts 'Credential' as a valid hook" {
+            $result = Invoke-Action -Hook Credential -ScriptBlock { param($Context) 'credential-ran' } -Context @{}
+            $result | Should -Be 'credential-ran'
+        }
+
+        It "Resolves a named Target action from Actions/Target/<Name>.ps1" {
+            $actionPath = Join-Path $TestDrive 'Actions\Target\Fixture.ps1'
+            $null = New-Item -Path (Split-Path $actionPath) -ItemType Directory -Force
+            @'
+param([hashtable]$Context = @{})
+return "target:$($Context.ComputerName)"
+'@ | Set-Content -Path $actionPath
+
+            $result = Invoke-Action -Hook Target -Name 'Fixture' -Context @{ ComputerName = 'node01' }
+            $result | Should -Be 'target:node01'
+        }
+    }
+
 }

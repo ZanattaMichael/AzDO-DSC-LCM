@@ -45,6 +45,31 @@ Describe "Invoke-EngineAction Function Tests" -Tag Unit, Actions, Engine {
             { Invoke-EngineAction -Method 'Test' -ModuleName 'Mod' -Name 'Res' } |
                 Should -Throw "*returned no result*"
         }
+
+        It "Forwards -Session through to the engine context (#57 §4)" {
+            Mock -CommandName Invoke-Action -MockWith {
+                return [pscustomobject]@{ InDesiredState = $true }
+            }
+            $fakeSession = [pscustomobject]@{ Marker = 'fake-session' }
+
+            $null = Invoke-EngineAction -Method 'Test' -ModuleName 'Mod' -Name 'Res' -Session $fakeSession
+
+            Assert-MockCalled -CommandName Invoke-Action -Exactly 1 -Scope It -ParameterFilter {
+                $Context.Session -eq $fakeSession
+            }
+        }
+
+        It "Defaults Session to null when not supplied (local execution, today's default)" {
+            Mock -CommandName Invoke-Action -MockWith {
+                return [pscustomobject]@{ InDesiredState = $true }
+            }
+
+            $null = Invoke-EngineAction -Method 'Test' -ModuleName 'Mod' -Name 'Res'
+
+            Assert-MockCalled -CommandName Invoke-Action -Exactly 1 -Scope It -ParameterFilter {
+                $null -eq $Context.Session
+            }
+        }
     }
 
 }
