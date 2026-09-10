@@ -19,6 +19,9 @@ PipelineRunnerSettings:
   ConfigurationVersion: 0.1
   PipelineRunnerVersion: 0.1
   DSCResourceVersion: 2.0
+  # ProjectPolicies/Project.yml uses postExecutionScript (Stop-TaskProcessing on teardown),
+  # so this configuration must opt in to lifecycle scripts (issue #57 §2).
+  AllowExecutionScripts: true
 
 # Datum Handlers are used to process Datum values.
 DatumHandlers:
