@@ -88,6 +88,19 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
         . (Get-FunctionPath 'Resolve-PipelineParameter.ps1').FullName
         . (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
         . (Get-FunctionPath 'ConvertTo-NormalizedConditionExpression.ps1').FullName
+
+        # The preCondition/postCondition allow-list Assert-SafeConditionExpression validates
+        # against (parameters/variables/reference/equals/not/result/stopProcessing) is only
+        # syntactically enforced there - each name must also exist as a real function for the
+        # dynamically created script block to actually invoke (#57 §2). Invoke-DscRunner dot-
+        # sources these for free; this suite calls Start-DscRunner directly, so it must too.
+        . (Get-FunctionPath 'parameters.ps1').FullName
+        . (Get-FunctionPath 'variables.ps1').FullName
+        . (Get-FunctionPath 'reference.ps1').FullName
+        . (Get-FunctionPath 'equals.ps1').FullName
+        . (Get-FunctionPath 'not.ps1').FullName
+        . (Get-FunctionPath 'result.ps1').FullName
+        . (Get-FunctionPath 'stopProcessing.ps1').FullName
         . (Get-FunctionPath 'Stop-TaskProcessing.ps1').FullName
 
         # Dot-sourced so the runner calls the REAL pre-parse / format / custom-task rules. Each of
