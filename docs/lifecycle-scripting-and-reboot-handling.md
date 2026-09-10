@@ -70,7 +70,7 @@ To make that useful, the function language needs one more read-only accessor:
 
 - **`result()`** — with no argument, returns the current resource's `[DscMethodResult]` from the
   most recent `Test`/`Set` call (so `postCondition` can write
-  `not(equals(result().InDesiredState, $true))` or, once §2.3 lands,
+  `not (equals (result().InDesiredState) $true)` or, once §2.3 lands,
   `$(result().RebootRequired)`). Scoped to `postCondition` only — `preCondition` runs before any
   engine call exists for this resource, so `result()` there is a defined error ("no result yet"),
   not `$null`, to avoid a silently-always-false condition.

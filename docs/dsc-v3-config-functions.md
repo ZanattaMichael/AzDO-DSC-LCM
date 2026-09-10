@@ -29,7 +29,7 @@ a `$(...)` sub-expression or a resource `condition`:
 | `parameters('Name')` | `source/Private/Runner/parameters.ps1` | reads `$parameters` (throws if undefined) |
 | `variables('Name')` | `source/Private/Runner/variables.ps1` | reads `$variables` |
 | `reference('Name')` | `source/Private/Runner/reference.ps1` | reads a prior resource's `Get` output from `$references` |
-| `equals(Left, Right)` | `source/Private/Runner/equals.ps1` | string equality |
+| `equals Left Right` | `source/Private/Runner/equals.ps1` | string equality |
 | `not($Statement)` | `source/Private/Runner/not.ps1` | boolean negation |
 
 `condition` is evaluated separately, as a `[scriptblock]`, gated by
@@ -38,7 +38,9 @@ side-effect-free predicate — no command invocation, assignment, or method call
 
 This is the runner's own ARM-Template-like function language: property values look like
 `$(parameters('DriveLetter'))`, `$(reference('Disk1'))`, or a `condition` of
-`$(equals(parameters('Environment'), 'Prod'))`.
+`$(equals (parameters 'Environment') 'Prod')`. These are ordinary PowerShell commands, so a
+multi-argument call takes space-separated arguments, not `equals(a, b)` — the comma-in-parens
+form parses as a single array argument and silently mis-binds.
 
 ## 2. DSC v3's own configuration function language
 

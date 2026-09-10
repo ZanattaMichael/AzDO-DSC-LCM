@@ -104,7 +104,10 @@ The pipeline runner provides a set of features applicable to all Desired State C
     invocation, a variable assignment, or a method call is still rejected. Unlike a bare
     comparison, `parameters()`/`reference()` throw on a missing key or reference rather than
     silently resolving to `$null`, so a typo fails just that resource instead of skipping it
-    unnoticed:
+    unnoticed. These are ordinary PowerShell commands, so multi-argument calls take
+    space-separated arguments — `equals (parameters 'Environment') 'Prod'`, not
+    `equals(parameters('Environment'), 'Prod')` — the comma-in-parens form parses as a single
+    array argument and silently mis-binds:
 
     ```yaml
     - name: CON Board Administrators
@@ -125,7 +128,7 @@ The pipeline runner provides a set of features applicable to all Desired State C
     ```yaml
     - name: Print Spooler
       type: PSDscResources/Service
-      postCondition: result().InDesiredState -or (not(equals(parameters('Environment'), 'Prod')))
+      postCondition: result().InDesiredState -or (not (equals (parameters 'Environment') 'Prod'))
     ```
 
 - __preExecutionScript__ / __postExecutionScript__: run arbitrary PowerShell immediately
