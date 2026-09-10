@@ -144,6 +144,7 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
         . (Get-FunctionPath 'Invoke-DscExecutable.ps1').FullName
 
         . (Get-FunctionPath 'Start-DscRunner.ps1').FullName
+        . (Get-FunctionPath 'Get-PipelineRunnerSetting.ps1').FullName
         . (Get-FunctionPath 'GetDefaultValues.ps1').FullName
         . (Get-FunctionPath 'SetVariables.ps1').FullName
         . (Get-FunctionPath 'ConvertTo-CaseInsensitiveHashtable.ps1').FullName
@@ -241,6 +242,14 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
             # only, resolved with Ensure = Absent because the Projects\Absent layer has no Magenta file).
             $script:BuildConfigPath    = Build-CompiledNode -Datum $datum -ProjectPresence 'Present' -ProjectName $script:ProjectName -OutputDirectory $script:CompiledDir
             $script:TeardownConfigPath = Build-CompiledNode -Datum $datum -ProjectPresence 'Absent'  -ProjectName $script:ProjectName -OutputDirectory $script:CompiledDir
+
+            # Start-DscRunner does not resolve PipelineRunnerSettings itself (that is
+            # Invoke-DscRunner's job); this suite calls Start-DscRunner directly, so it must
+            # resolve the block from the shipped Datum.yml and forward it, or gates like
+            # AllowExecutionScripts (#57 §2) see an empty settings hashtable regardless of what
+            # Datum.yml declares.
+            $script:RunnerSettings = Get-PipelineRunnerSetting -ConfigurationDirectory $script:ExampleConfigPath
+            if (-not $script:RunnerSettings) { $script:RunnerSettings = @{} }
         }
         finally {
             Pop-Location
@@ -278,7 +287,7 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
             try {
                 if ($script:TeardownConfigPath -and (Test-Path -LiteralPath $script:TeardownConfigPath)) {
                     $script:StopTaskProcessing = $false
-                    $null = Start-DscRunner -FilePath $script:TeardownConfigPath -Mode 'Set' -Engine 'DscV3'
+                    $null = Start-DscRunner -FilePath $script:TeardownConfigPath -Mode 'Set' -Engine 'DscV3' -RunnerSettings $script:RunnerSettings
                 }
             }
             catch {
@@ -382,7 +391,7 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
             # dsc.exe against the live org and the runner surfaces a legible, structured result.
             Connect-AzureDevOps
 
-            $result = Start-DscRunner -FilePath $script:BuildConfigPath -Mode 'Test' -Engine 'DscV3'
+            $result = Start-DscRunner -FilePath $script:BuildConfigPath -Mode 'Test' -Engine 'DscV3' -RunnerSettings $script:RunnerSettings
 
             $result               | Should -Not -BeNullOrEmpty
             $result.Status        | Should -Be 'Completed'
@@ -408,7 +417,7 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
 
             # 2. BUILD: apply the Present node through dsc.exe. Over convergence every resource reaches
             #    desired state.
-            $build = Start-DscRunner -FilePath $script:BuildConfigPath -Mode 'Set' -Engine 'DscV3'
+            $build = Start-DscRunner -FilePath $script:BuildConfigPath -Mode 'Set' -Engine 'DscV3' -RunnerSettings $script:RunnerSettings
             $build.Status    | Should -Be 'Completed'
             $build.FailCount | Should -Be 0
 
@@ -417,14 +426,14 @@ Describe "Azure DevOps environment lifecycle against the Example Configuration (
 
             # 3. IDEMPOTENT: a Test pass over the just-built environment reports no drift.
             $script:StopTaskProcessing = $false
-            $verify = Start-DscRunner -FilePath $script:BuildConfigPath -Mode 'Test' -Engine 'DscV3'
+            $verify = Start-DscRunner -FilePath $script:BuildConfigPath -Mode 'Test' -Engine 'DscV3' -RunnerSettings $script:RunnerSettings
             $verify.Status    | Should -Be 'Completed'
             $verify.FailCount | Should -Be 0
 
             # 4. TEARDOWN: apply the Absent node. The Project's postExecutionScript calls
             #    Stop-TaskProcessing, so removing the project halts the rest of the run.
             $script:StopTaskProcessing = $false
-            $teardown = Start-DscRunner -FilePath $script:TeardownConfigPath -Mode 'Set' -Engine 'DscV3'
+            $teardown = Start-DscRunner -FilePath $script:TeardownConfigPath -Mode 'Set' -Engine 'DscV3' -RunnerSettings $script:RunnerSettings
             $teardown.Status    | Should -Be 'StoppedByRequest'
             $teardown.SkipCount | Should -BeGreaterThan 0
         }
