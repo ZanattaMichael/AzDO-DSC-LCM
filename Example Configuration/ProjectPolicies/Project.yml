@@ -10,6 +10,17 @@ resources:
 
   - name: Project
     type: AzureDevOpsDscNative/AzDoProject
+    # postExecutionScript / Stop-TaskProcessing (issue #57 §2) is the proven teardown mechanism
+    # the real Azure DevOps lifecycle suites depend on: removing the project halts the rest of
+    # the run (everything else cascades under it). issue #57 §2 also added a postCondition-only
+    # equivalent, stopProcessing() (e.g. `postCondition: result().InDesiredState -or
+    # stopProcessing()` - see README.md and docs/lifecycle-scripting-and-reboot-handling.md §2.4),
+    # but it is intentionally NOT used here in place of this postExecutionScript: this resource is
+    # evaluated in Test mode too (with no Set), where a resource not yet existing is normal drift
+    # rather than a reason to stop the whole run early, and using stopProcessing() unconditionally
+    # would do exactly that. postExecutionScript's own `if ($Project_Ensure -eq 'Absent')` guard
+    # avoids that by only ever running in Set mode's teardown branch. Kept as-is rather than
+    # replaced, so this example does not reintroduce the failure fixed in f0385eb.
     postExecutionScript: if ($Project_Ensure -eq 'Absent') { Stop-TaskProcessing }
     properties:
       projectName: $ProjectName
@@ -21,8 +32,17 @@ resources:
 
   - name: Project Services
     type: AzureDevOpsDscNative/AzDoProjectServices
-    dependsOn: 
+    dependsOn:
       - AzureDevOpsDscNative/AzDoProject/Project
+    # postCondition (issue #57 §2): evaluated after Test/Set, using the result() accessor
+    # (reserved for postCondition) to read this resource's own normalized engine outcome. A
+    # $false result marks the resource FAIL regardless of what the engine itself reported. The
+    # second clause is a defensive fallback should this resource ever be reordered ahead of the
+    # Project resource's Absent-teardown stop (today's dependsOn/Sort-DependsOn ordering means it
+    # never runs during a teardown at all): "converged, or we are not building a Present project".
+    # Argument style note: PowerShell command syntax is space-separated, not comma-in-parens -
+    # `equals (variables 'X') 'Y'`, not `equals(X, Y)` (which throws a parameter-binding error).
+    postCondition: result().InDesiredState -or (not (equals (variables 'Project_Ensure') 'Present'))
     properties:
       projectName: $ProjectName
       GitRepositories: $( if ([string]::IsNullOrEmpty($Project_Service_GitRepositories)) { 'disabled' } else { $Project_Service_GitRepositories } )
@@ -30,3 +50,12 @@ resources:
       AzureArtifact: $( if ([string]::IsNullOrEmpty($Project_Service_AzureArtifact)) { 'disabled' } else { $Project_Service_AzureArtifact } )
       WorkBoards: $( if ([string]::IsNullOrEmpty($Project_Service_WorkBoards)) { 'disabled' } else { $Project_Service_WorkBoards } )
       TestPlans: $( if ([string]::IsNullOrEmpty($Project_Service_TestPlans)) { 'disabled' } else { $Project_Service_TestPlans } )
+
+# target / resourceCredential (issue #57 §4/§7) are intentionally NOT demonstrated in this example:
+# every resource here is AzureDevOpsDscNative, which talks to the Azure DevOps REST API in-process
+# (there is nothing to remote into - no WinRM/SSH host, no local credential to inject), so a
+# `target: WinRM`/`target: SSH` or `resourceCredential:` block would be inert fabricated
+# infrastructure rather than a real demonstration. See docs/remote-target-credential-handling.md
+# for the documented syntax (`target: { action: WinRM, computerName: ..., credential: {...} }`,
+# `resourceCredential: { action: SecretManagement, name: ..., propertyName: Credential }`), which
+# applies to resource modules that target a remote machine (e.g. PSDscResources/SqlServerDsc).
