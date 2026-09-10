@@ -43,7 +43,7 @@ This module utilizes Datum from Gael Colas to streamline configuration. For more
 
     ```yaml
     - name: CON Board Administrators
-      condition: $ProjectWorkBoardsStatus -eq 'enabled'
+      preCondition: $ProjectWorkBoardsStatus -eq 'enabled'
       type: AzureDevOpsDscNative/AzDoProjectGroup
       dependsOn:
         - AzureDevOpsDscNative/AzDoProject/Project
@@ -68,10 +68,15 @@ This module utilizes Datum from Gael Colas to streamline configuration. For more
 
     ```yaml
     PipelineRunnerSettings:
-      ConfigurationVersion: 0.1
-      PipelineRunnerVersion: 0.1
+      ConfigurationVersion: 0.2
+      PipelineRunnerVersion: 1.0.0
       DSCResourceVersion: 2.0
     ```
+
+    `ConfigurationVersion` tracks the configuration's own YAML shape and must be bumped
+    whenever the configuration's structure changes; `PipelineRunnerVersion` should reflect
+    the `Dsc.PipelineRunner` module version the configuration was authored/tested against
+    (`ModuleVersion` in `source/Dsc.PipelineRunner.psd1`).
 
     The runner enforces the following version constraints (defined in `source\Public\VersionConfiguration.ps1`):
 

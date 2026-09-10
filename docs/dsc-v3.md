@@ -28,7 +28,7 @@ resources:
   - type: Microsoft.Windows/Registry     # namespace/name
     name: SetKey
     properties: { keyPath: '...', valueName: '...', valueData: { String: 'x' } }
-    condition: "1 -eq 1"                  # pipeline-only
+    preCondition: "1 -eq 1"                # pipeline-only
     postExecutionScript: "..."           # pipeline-only
     dependsOn: [ ... ]                    # pipeline-only (runner orders execution)
 parameters: { ... }                      # pipeline-only
@@ -37,14 +37,14 @@ conditions: { ... }                      # pipeline-only
 ```
 
 Start-DscRunner consumes this one resource at a time: it sorts by `dependsOn`, evaluates
-`condition`, resolves `properties` (parameter tokens first, then `variables` and calculated
+`preCondition`, resolves `properties` (parameter tokens first, then `variables` and calculated
 properties), and calls the selected engine per resource.
 The `DscV3` engine turns each resource into `dsc resource test|set|get --resource <type>
 --input <json>`.
 
 A **DSC v3 configuration document** — what `dsc config get|test|set` consumes — is a different,
 schema-governed shape. It carries a top-level `$schema` and resources limited to `name`, `type`
-and `properties`; it has no concept of the runner's `condition`, `postExecutionScript`,
+and `properties`; it has no concept of the runner's `preCondition`, `postExecutionScript`,
 `variables`, or the runner's `parameters`/`conditions`:
 
 ```yaml
