@@ -90,7 +90,7 @@ Describe "Start-DscRunner pipeline integration" -Tag Integration {
         }
 
         Mock -CommandName Invoke-PreParseRules -MockWith {
-            param([Parameter(Mandatory = $true)] [Object[]]$Tasks)
+            param([Parameter(Mandatory = $true)] [Object[]]$Tasks, [hashtable]$Settings)
         }
 
         Mock -CommandName Invoke-FormatTasks -MockWith {
@@ -302,6 +302,90 @@ Describe "Start-DscRunner pipeline integration" -Tag Integration {
             $result.Status    | Should -Be 'StoppedByRequest'
             $result.SkipCount | Should -Be 1
             $result.PassCount | Should -Be 1
+        }
+    }
+
+    Context "preExecutionScript runs before Test/Set (#57 §2)" {
+
+        # Start-DscRunner.tests.ps1 (unit) already proves preExecutionScript runs at all, by
+        # having the engine mock assert a marker is set by the time it is called. This
+        # integration test proves the stronger, specifically-requested claim - ordering -
+        # empirically, against the real runner loop and a custom engine stub that records
+        # exactly what it observed at the moment it ran, rather than asserting inside the mock
+        # itself. The gating behaviour (PipelineRunnerSettings.AllowExecutionScripts) is proven
+        # independently by Test-ExecutionScriptsAllowed.tests.ps1, which is the real production
+        # gate (Invoke-PreParseRules -> Test-ExecutionScriptsAllowed); it is not re-tested at
+        # this level because both this file and the unit suite substitute Invoke-PreParseRules
+        # with a no-op stub (see the header comment above) so the gate never runs here.
+        It "has already written the marker preExecutionScript sets before the engine's Test call observes it" {
+
+            $json = @'
+{
+  "parameters": {},
+  "variables": { "marker": "not-set" },
+  "resources": [
+    { "type": "Test/App", "name": "App", "preExecutionScript": "$variables['marker'] = 'set-by-preExecutionScript'", "properties": {} }
+  ]
+}
+'@
+            $config = New-ConfigFile -Name 'pre-exec-order.json' -Json $json
+
+            $observedAtTest = 'never-observed'
+            $engineAction = {
+                param($Context)
+                if ($Context.Method -eq 'Test') {
+                    # Read the marker from the enclosing scope's $variables at the exact moment
+                    # the engine is invoked, so this proves ordering rather than merely that the
+                    # script ran at some point during the whole run.
+                    $script:observedAtTest = $variables['marker']
+                }
+                return @{ InDesiredState = $true; Message = 'stub-Test' }
+            }.GetNewClosure()
+
+            $result = Start-DscRunner -FilePath $config -EngineAction $engineAction
+
+            $script:observedAtTest | Should -Be 'set-by-preExecutionScript'
+            $variables['marker']   | Should -Be 'set-by-preExecutionScript'
+            $result.PassCount      | Should -Be 1
+        }
+
+        It "runs preExecutionScript again before Set when Test reports drift in Set mode" {
+
+            $json = @'
+{
+  "parameters": {},
+  "variables": { "runCount": 0 },
+  "resources": [
+    { "type": "Test/Drift", "name": "Drift", "preExecutionScript": "$variables['runCount'] = $variables['runCount'] + 1", "properties": {} }
+  ]
+}
+'@
+            $config = New-ConfigFile -Name 'pre-exec-order-set.json' -Json $json
+
+            $observedBeforeTest = -1
+            $observedBeforeSet  = -1
+            $engineAction = {
+                param($Context)
+                if ($Context.Method -eq 'Test') {
+                    $script:observedBeforeTest = $variables['runCount']
+                    return @{ InDesiredState = $false; Message = 'drift' }
+                }
+                if ($Context.Method -eq 'Set') {
+                    $script:observedBeforeSet = $variables['runCount']
+                    return @{ InDesiredState = $true; Message = 'stub-Set' }
+                }
+                return @{ InDesiredState = $true; Message = 'stub' }
+            }.GetNewClosure()
+
+            $result = Start-DscRunner -FilePath $config -Mode 'Set' -EngineAction $engineAction
+
+            # preExecutionScript runs once per resource, immediately before Test (#57 §2); it does
+            # not run a second time before Set, so both Test and Set observe the same single
+            # increment - proving preExecutionScript's placement is before the Test/Set pair, not
+            # merely "before Set" or "before Test only".
+            $observedBeforeTest | Should -Be 1
+            $observedBeforeSet  | Should -Be 1
+            $result.PassCount   | Should -Be 1
         }
     }
 

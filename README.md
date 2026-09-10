@@ -43,7 +43,7 @@ This module utilizes Datum from Gael Colas to streamline configuration. For more
 
     ```yaml
     - name: CON Board Administrators
-      condition: $ProjectWorkBoardsStatus -eq 'enabled'
+      preCondition: $ProjectWorkBoardsStatus -eq 'enabled'
       type: AzureDevOpsDscNative/AzDoProjectGroup
       dependsOn:
         - AzureDevOpsDscNative/AzDoProject/Project
@@ -68,10 +68,15 @@ This module utilizes Datum from Gael Colas to streamline configuration. For more
 
     ```yaml
     PipelineRunnerSettings:
-      ConfigurationVersion: 0.1
-      PipelineRunnerVersion: 0.1
+      ConfigurationVersion: 0.2
+      PipelineRunnerVersion: 1.0.0
       DSCResourceVersion: 2.0
     ```
+
+    `ConfigurationVersion` tracks the configuration's own YAML shape and must be bumped
+    whenever the configuration's structure changes; `PipelineRunnerVersion` should reflect
+    the `Dsc.PipelineRunner` module version the configuration was authored/tested against
+    (`ModuleVersion` in `source/Dsc.PipelineRunner.psd1`).
 
     The runner enforces the following version constraints (defined in `source\Public\VersionConfiguration.ps1`):
 
@@ -85,17 +90,57 @@ This module utilizes Datum from Gael Colas to streamline configuration. For more
 
 The pipeline runner provides a set of features applicable to all Desired State Configuration (DSC) resources, enhancing their flexibility and control. These features include:
 
-- __condition__: This feature allows conditional execution of resources. The condition is evaluated as a PowerShell expression before the resource runs. If the condition evaluates to `$true`, the resource executes; if it evaluates to `$false`, the resource is skipped. This is useful for dynamically controlling resource execution based on specific criteria.
+- __preCondition__ (formerly `condition`, which is still accepted as a deprecated alias):
+  This feature allows conditional execution of resources. The expression is evaluated as a
+  PowerShell predicate before the resource runs. If it evaluates to `$true`, the resource
+  executes; if it evaluates to `$false`, the resource is skipped. This is useful for
+  dynamically controlling resource execution based on specific criteria.
 
     __Example:__
 
     ```yaml
     - name: CON Board Administrators
-      condition: $ProjectWorkBoardsStatus -eq 'enabled'
+      preCondition: $ProjectWorkBoardsStatus -eq 'enabled'
       type: AzureDevOpsDscNative/AzDoProjectGroup
     ```
 
-- __postExecutionScript__: This feature triggers a script after the resource has been executed. It can be used to perform additional operations or clean-up tasks following the resource's execution. This is helpful for managing state changes or handling post-execution logic.
+    A preCondition may also call the function-language accessors `parameters()`, `variables()`,
+    `reference()`, `equals()` and `not()` — an explicit allow-list; any other command
+    invocation, a variable assignment, or a method call is still rejected. Unlike a bare
+    comparison, `parameters()`/`reference()` throw on a missing key or reference rather than
+    silently resolving to `$null`, so a typo fails just that resource instead of skipping it
+    unnoticed. These are ordinary PowerShell commands, so multi-argument calls take
+    space-separated arguments — `equals (parameters 'Environment') 'Prod'`, not
+    `equals(parameters('Environment'), 'Prod')` — the comma-in-parens form parses as a single
+    array argument and silently mis-binds:
+
+    ```yaml
+    - name: CON Board Administrators
+      preCondition: (parameters('Environment')) -eq 'Prod' -and (variables('ProjectWorkBoardsStatus')) -eq 'enabled'
+      type: AzureDevOpsDscNative/AzDoProjectGroup
+    ```
+
+- __postCondition__: evaluated after the resource's `Test`/`Set`, before `postExecutionScript`.
+  A `$false` result marks the resource `FAIL` regardless of what the engine itself reported —
+  it asserts something about the *outcome*, where `preCondition` decides whether the resource
+  runs at all. It is parsed by the same predicate allow-list as `preCondition`, plus two
+  accessors reserved for `postCondition` only: `result()` (the resource's normalized engine
+  result — `InDesiredState` / `RebootRequired` / `Message` / `Raw`) and `stopProcessing()` (see
+  below).
+
+    __Example:__
+
+    ```yaml
+    - name: Print Spooler
+      type: PSDscResources/Service
+      postCondition: result().InDesiredState -or (not (equals (parameters 'Environment') 'Prod'))
+    ```
+
+- __preExecutionScript__ / __postExecutionScript__: run arbitrary PowerShell immediately
+  before, or after, the resource's `Test`/`Set` evaluation. Useful for preparing state a
+  resource depends on, or for clean-up/state-change logic afterwards. Unlike a condition,
+  these are not restricted to a predicate — see `AllowExecutionScripts` below, which gates
+  their use.
 
     __Example:__
 
@@ -103,6 +148,36 @@ The pipeline runner provides a set of features applicable to all Desired State C
     - name: Project
       type: AzureDevOpsDscNative/AzDoProject
       postExecutionScript: if ($Project_Ensure -eq 'Absent') { Stop-TaskProcessing }
+    ```
+
+- __AllowExecutionScripts__ (`PipelineRunnerSettings.AllowExecutionScripts`, default `false`):
+  a configuration-level gate on `preExecutionScript`/`postExecutionScript`. Because an
+  execution script runs unrestricted code in the runner's own process, a configuration must
+  opt in explicitly before any resource may carry one; otherwise the run fails at PreParse
+  time, naming every offending resource in one pass, before any resource is evaluated.
+
+    ```yaml
+    PipelineRunnerSettings:
+      AllowExecutionScripts: true
+    ```
+
+- __resourceCredential__: a declarative way to inject a resolved credential into a resource's
+  own properties (for example a resource's `-Credential` parameter) without the credential
+  ever appearing in the configuration file. It resolves through the `Credential` action hook
+  (see below) and, unlike `preExecutionScript`/`postExecutionScript`, works even when
+  `AllowExecutionScripts` is off — it is declarative, not a script.
+
+    __Example:__
+
+    ```yaml
+    - name: SQL Login
+      type: SqlServerDsc/SqlLogin
+      properties:
+        InstanceName: MSSQLSERVER
+      resourceCredential:
+        action: SecretManagement   # a file in Actions/Credential/ (default: Environment)
+        name: sql-service-account  # the secret name
+        propertyName: Credential   # the properties key the resolved PSCredential is written to (default: Credential)
     ```
 
 - __dependsOn__: This feature establishes a dependency chain, ensuring that resources are executed in a specific order. By defining dependencies, you can create a structured sequence of resource execution, where a resource will only run after its dependencies have successfully completed. This is particularly useful in complex configurations where the order of operations is critical.
@@ -168,6 +243,17 @@ In the realm of configuration, there are specialized commands designed to modify
 
     In this scenario, when the project is set for deletion, it will remove the project and subsequently halt any further tasks from executing within the pipeline.
 
+- _stopProcessing()_: the `postCondition`-only counterpart of `Stop-TaskProcessing`. It sets
+  the same run-control flag, so the remaining resources in the file are skipped, but it is
+  reachable from a `postCondition` expression (which cannot call arbitrary commands) rather
+  than only from `preExecutionScript`/`postExecutionScript`:
+
+    ```yaml
+    - name: Print Spooler
+      type: PSDscResources/Service
+      postCondition: result().InDesiredState -or stopProcessing()
+    ```
+
 ### Deep Dive: Configuration Merging and Executing Process
 
 1. Datum merges the example configuration based on the resolution precedence.
@@ -176,8 +262,10 @@ In the realm of configuration, there are specialized commands designed to modify
 1. The runner executes the `Pre-Parse` and `Format` rules.
 1. The `Resources` are ordered according to the `dependsOn` property.
 1. The runner iterates through each of the Resources and performs the following steps:
-    1. Checks if `Stop-TaskProcessing` has been executed; if so, the resource will be skipped.
-    1. Checks for the `condition` property and evaluates the expression. The resource executes when the condition is `$true`; a `$false` result skips the resource.
+    1. Checks if `Stop-TaskProcessing`/`stopProcessing()` has been called; if so, the resource will be skipped.
+    1. Checks for the `preCondition` property (the `condition` key still works, as a
+       deprecated alias) and evaluates the expression. The resource executes when it is
+       `$true`; a `$false` result skips the resource.
     1. Resolves the resource's properties in two passes. The first pass substitutes whole-value
        parameter tokens (`<params=Name>`), which keeps the parameter's type intact; the second
        pass interpolates variables and evaluates any calculated properties. Running them in that
@@ -192,8 +280,19 @@ In the realm of configuration, there are specialized commands designed to modify
        A token naming an undeclared parameter fails that one resource and is recorded in the run
        report; it is not silently resolved to `$null`, and it does not abort the rest of the file.
 
+    1. Resolves the resource's execution `target` (a per-resource override, falling back to
+       `PipelineRunnerSettings.Target`, default `Local`) and its `resourceCredential`, if any,
+       through the `Target`/`Credential` action hooks.
+    1. If present, runs `preExecutionScript` before the engine call (gated by
+       `AllowExecutionScripts`).
     1. Executes the resource through the selected `Engine` action — `Invoke-DscResource` for
-       `DscV2` (the default), `dsc.exe` for `DscV3`.
+       `DscV2` (the default), `dsc.exe` for `DscV3` — passing the resolved target session
+       when the resource is not running against `Local`.
+    1. If `Set` reports `RebootRequired`: a remote target is restarted (`Restart-Computer
+       -Wait`) and the run continues once it is back; a local target fails the resource and
+       stops the rest of the file, unless `PipelineRunnerSettings.Reboot: Ignore` is set.
+    1. Checks for the `postCondition` property and evaluates it; a `$false` result marks the
+       resource `FAIL` regardless of the engine's own outcome.
     1. Upon completion (even in case of an error), the runner checks for the `postExecutionScript` property and invokes the code if present.
     1. The runner calls the engine's `Get` method on the resource and stores the result in a references table, making it available to subsequent resources via the `reference` function.
 
@@ -208,6 +307,8 @@ named file under `Actions/<Hook>/<Name>.ps1` (or overridden inline with a
 | `Source` | Resolve the configuration to a local directory | `Local` (default), `Git` | `Source` |
 | `Connect` | Establish auth/session before evaluation | `None` (default), `AzureDevOps` | `Connect` |
 | `Engine` | Drive resource `Test`/`Set`/`Get` | `DscV2` (default, `Invoke-DscResource`), `DscV3` (`dsc.exe`) | `Engine` |
+| `Target` | Resolve the session a resource evaluates against | `Local` (default, no-op), `WinRM` (CimSession + PSSession), `SSH` (PSSession over SSH, DscV3 only) | `PipelineRunnerSettings.Target` / per-resource `target.action` |
+| `Credential` | Resolve a `[PSCredential]` for a target connection or a `resourceCredential` | `Environment` (default, from env vars), `Static` (inline, dev/test only), `SecretManagement` (`Get-Secret` from a registered vault) | per-use `action` key (a `target.credential` or `resourceCredential` block) |
 
 Select an action by name in `Datum.yml`:
 
@@ -240,6 +341,16 @@ reporting stays engine-independent regardless of which engine ran. See
 [docs/dsc-v3.md](docs/dsc-v3.md) for the DSC v3 engine, and
 [docs/hosted-agent-dsc-v3.md](docs/hosted-agent-dsc-v3.md) for running it on a
 hosted Linux agent (bootstrap, engine selection, pipeline-native auth).
+[docs/lifecycle-scripting-and-reboot-handling.md](docs/lifecycle-scripting-and-reboot-handling.md)
+covers the design behind `preCondition`/`postCondition`/`preExecutionScript`/
+`postExecutionScript`, the `stopProcessing()` function-language extension, and
+reboot handling for resources that report `RebootRequired` — implemented here
+with a simplified fail-and-stop (or `Reboot: Ignore`) policy for local targets
+and an in-process `Restart-Computer -Wait` for remote targets, rather than a
+full checkpoint/resume across separate runs.
+[docs/remote-target-credential-handling.md](docs/remote-target-credential-handling.md)
+covers the `Target` and `Credential` action design used for remote-target
+execution and `resourceCredential` resolution.
 
 ## Public Commands
 

@@ -16,12 +16,20 @@ name: Azure DevOps Real Lifecycle DSC v3 Self-Hosted
 
 on:
   push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "*" ]
   workflow_dispatch:
 
   # Reused as a release gate by the tag-driven Release workflow.
   workflow_call:
+
+# Serialize (don't cancel) superseded runs for the same branch/PR: this workflow does real
+# build/teardown against a live Azure DevOps org, so killing an in-progress run mid-teardown
+# would risk leaving the org in an inconsistent state.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   azuredevops-v3-selfhosted:

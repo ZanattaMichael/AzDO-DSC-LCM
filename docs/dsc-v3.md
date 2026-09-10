@@ -28,7 +28,7 @@ resources:
   - type: Microsoft.Windows/Registry     # namespace/name
     name: SetKey
     properties: { keyPath: '...', valueName: '...', valueData: { String: 'x' } }
-    condition: "1 -eq 1"                  # pipeline-only
+    preCondition: "1 -eq 1"                # pipeline-only
     postExecutionScript: "..."           # pipeline-only
     dependsOn: [ ... ]                    # pipeline-only (runner orders execution)
 parameters: { ... }                      # pipeline-only
@@ -37,14 +37,14 @@ conditions: { ... }                      # pipeline-only
 ```
 
 Start-DscRunner consumes this one resource at a time: it sorts by `dependsOn`, evaluates
-`condition`, resolves `properties` (parameter tokens first, then `variables` and calculated
+`preCondition`, resolves `properties` (parameter tokens first, then `variables` and calculated
 properties), and calls the selected engine per resource.
 The `DscV3` engine turns each resource into `dsc resource test|set|get --resource <type>
 --input <json>`.
 
 A **DSC v3 configuration document** — what `dsc config get|test|set` consumes — is a different,
 schema-governed shape. It carries a top-level `$schema` and resources limited to `name`, `type`
-and `properties`; it has no concept of the runner's `condition`, `postExecutionScript`,
+and `properties`; it has no concept of the runner's `preCondition`, `postExecutionScript`,
 `variables`, or the runner's `parameters`/`conditions`:
 
 ```yaml
@@ -102,3 +102,16 @@ is not a DSC v3 identifier instead of leaving you with an opaque non-zero exit f
 document with `ConvertTo-DscV3ConfigurationDocument` from a compiled-style resource list and
 feeds it to a real `dsc config get`. A non-zero exit fails the build, so DSC v3 compliance is
 verified against the actual engine on every push and pull request.
+
+## Configuration functions (planned)
+
+DSC v3 configuration documents have their own native function language
+(`[functionName(arg1, arg2)]` — `envvar()`, `resourceId()`, `concat()`, its own document-scoped
+`parameters()`/`variables()`, and more), separate from the runner's own `$(parameters(...))`
+function surface described in `Assert-SafeConditionExpression.ps1` and
+`source/Private/Runner/*.ps1`. Handling that syntax, and the whole-document
+(`dsc config get|test|set`) apply path it requires, is not yet implemented — see
+[`docs/dsc-v3-config-functions.md`](./dsc-v3-config-functions.md) for the design plan and the
+research into whether a combined multi-resource configuration can be applied as a unit under
+DSC v2 (it cannot, by this project's "no LCM" design) versus DSC v3 (`dsc config`, additive to
+today's per-resource engine).

@@ -18,6 +18,17 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         $StopTaskProcessingPath = (Get-FunctionPath 'Stop-TaskProcessing.ps1').FullName
         # #35: conditions are validated as side-effect-free predicates before they run.
         $AssertSafeConditionPath = (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
+        # #57 §2: both Assert-SafeConditionExpression and Start-DscRunner itself normalize
+        # result()/stopProcessing() syntax through this helper before parsing/executing a
+        # condition; load it before either so the real call inside them resolves.
+        $ConvertToNormalizedConditionExpressionPath = (Get-FunctionPath 'ConvertTo-NormalizedConditionExpression.ps1').FullName
+        # #57: the condition allow-list permits these function-language accessors, so a
+        # condition that calls them needs the real implementations loaded to execute.
+        $ParametersFnPath = (Get-FunctionPath 'parameters.ps1').FullName
+        $VariablesFnPath  = (Get-FunctionPath 'variables.ps1').FullName
+        $ReferenceFnPath  = (Get-FunctionPath 'reference.ps1').FullName
+        $EqualsFnPath     = (Get-FunctionPath 'equals.ps1').FullName
+        $NotFnPath        = (Get-FunctionPath 'not.ps1').FullName
         # Engine seam: Start-DscRunner now routes Test/Set/Get through Invoke-EngineAction,
         # which dispatches to Actions/Engine/DscV2.ps1 (the default engine that wraps
         # Invoke-DscResource). Load the loader, the wrapper, the normalizer and the
@@ -27,6 +38,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         . (Get-FunctionPath 'ConvertTo-DscMethodResult.ps1').FullName
         . (Get-FunctionPath 'Invoke-EngineAction.ps1').FullName
 
+        . $ConvertToNormalizedConditionExpressionPath
         . $preParseFilePath
         . $getDefaultValuesPath
         . $SetVariablesPath
@@ -39,6 +51,11 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         . $ResolvePipelineParameterPath
         . $StopTaskProcessingPath
         . $AssertSafeConditionPath
+        . $ParametersFnPath
+        . $VariablesFnPath
+        . $ReferenceFnPath
+        . $EqualsFnPath
+        . $NotFnPath
 
         # Start-DscRunner normalizes JSON-loaded configs through this helper so a
         # case-sensitive OrderedHashtable (ConvertFrom-Json -AsHashtable on PS 7.3+) does
@@ -125,7 +142,8 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
         Mock -CommandName Invoke-PreParseRules -MockWith {
             param(
                 [Parameter(Mandatory=$true)]
-                [Object[]]$Tasks
+                [Object[]]$Tasks,
+                [hashtable]$Settings
             )
 
         }
@@ -403,7 +421,7 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
             Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
         }
 
-        It "rejects a condition that invokes a command, aborting before the resource is evaluated" {
+        It "rejects a condition that invokes a command, failing only that resource" {
 
             Mock -CommandName ConvertFrom-Json -MockWith {
                 @{
@@ -417,16 +435,82 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
                             # A command invocation is not a predicate; it must be rejected (#35).
                             condition = 'Stop-TaskProcessing'
                         }
+                        @{
+                            type      = "Module/Resource"
+                            name      = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
                     )
                 }
             }
 
             $result = Start-DscRunner -FilePath $script:testJsonPath
 
-            $result.Status | Should -Be 'AbortedByException'
-            $result.ErrorMessage | Should -Match 'side-effect-free predicate'
-            # The offending resource is never evaluated.
-            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' } -Exactly 0 -Scope It
+            # A condition that fails Assert-SafeConditionExpression's checks is this resource's
+            # failure, not the whole run's: it is caught by the same per-resource try/catch used
+            # elsewhere in the loop, so the run completes and later resources still execute.
+            $result.Status | Should -Be 'Completed'
+            $result.FailCount | Should -Be 1
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).ErrorMessage | Should -Match 'side-effect-free predicate'
+            # The offending resource is never evaluated...
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop1 -eq 'value1' } -Exactly 0 -Scope It
+            # ...but the run continues with the remaining resources.
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop2 -eq 'value2' } -Exactly 1 -Scope It
+        }
+
+        It "allows the function-language accessors inside a condition and permits the resource to run" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{
+                        Environment = @{ defaultValue = 'Prod' }
+                    }
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type      = "Module/Resource"
+                            name      = "Resource1"
+                            properties = @{ prop1 = "value1" }
+                            condition = "(parameters('Environment')) -eq 'Prod'"
+                        }
+                    )
+                }
+            }
+
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop1 -eq 'value1' } -Exactly 1 -Scope It
+        }
+
+        It "fails only the resource whose condition calls parameters() with an undefined name" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type      = "Module/Resource"
+                            name      = "Resource1"
+                            properties = @{ prop1 = "value1" }
+                            # parameters() throws on a missing key; the run must survive it (#35 / #57).
+                            condition = "parameters('Missing')"
+                        }
+                        @{
+                            type      = "Module/Resource"
+                            name      = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            $result.Status | Should -Be 'Completed'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop2 -eq 'value2' } -Exactly 1 -Scope It
         }
 
         It "does not let a postExecutionScript assignment change the mode of later resources" {
@@ -656,6 +740,473 @@ Describe "Start-DscRunner Function Tests" -Tag Unit {
             Should -InvokeVerifiable
             $result.FailCount | Should -Be 1
 
+        }
+    }
+
+    Context "postCondition and stopProcessing() (#57 §2)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+            . (Get-FunctionPath 'result.ps1').FullName
+            . (Get-FunctionPath 'stopProcessing.ps1').FullName
+        }
+
+        It "marks the resource FAIL when postCondition returns false, even though the engine reports InDesiredState" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "result().InDesiredState -and `$false"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+        }
+
+        It "lets postCondition read result() from the engine's Test outcome" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "result().InDesiredState"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'OK'
+        }
+
+        It "rejects a postCondition that calls stopProcessing() indirectly through a disallowed pattern" {
+            # A postCondition is still parsed by the same AST allow-list; only 'result' and
+            # 'stopProcessing' are added on top of the ordinary condition allow-list, so an
+            # arbitrary other command is still rejected.
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "Get-Item C:\"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+        }
+
+        It "allows postCondition to call stopProcessing() and skips the remaining resources" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "stopProcessing()"
+                        }
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            $result.Status | Should -Be 'StoppedByRequest'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource2' }).Status | Should -Be 'SKIP'
+        }
+    }
+
+    Context "Security: injection attempts are neutralized end-to-end (#57)" -Tag Security {
+
+        # The unit level (Assert-SafeConditionExpression.tests.ps1) proves the AST guard rejects
+        # every payload below. These tests prove the stronger claim the issue asks for: that a
+        # malicious condition/preCondition/postCondition run through the REAL Start-DscRunner
+        # resource loop never actually executes its payload - it only fails that one resource
+        # via the same per-resource try/catch used throughout the loop (#35), and the run
+        # continues with the remaining resources. Every "dangerous" command below is mocked so a
+        # real bypass would be caught here rather than actually removing files or spawning
+        # processes on the test host.
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+            Mock -CommandName Remove-Item
+            Mock -CommandName Invoke-Expression
+            Mock -CommandName Start-Process
+        }
+
+        It "never invokes Remove-Item when a preCondition tries to inject it directly, and still runs the next resource" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type         = "Module/Resource"
+                            name         = "Resource1"
+                            properties   = @{ prop1 = "value1" }
+                            preCondition = 'Remove-Item C:\ -Recurse -Force'
+                        }
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            Assert-MockCalled -CommandName Remove-Item -Exactly 0 -Scope It
+            $result.Status | Should -Be 'Completed'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop1 -eq 'value1' } -Exactly 0 -Scope It
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop2 -eq 'value2' } -Exactly 1 -Scope It
+        }
+
+        It "never invokes Invoke-Expression when a preCondition injects it, even wrapped in the allow-listed not()" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type         = "Module/Resource"
+                            name         = "Resource1"
+                            properties   = @{ prop1 = "value1" }
+                            # The AST walk catches a disallowed command nested inside an
+                            # allow-listed call (#57 §1); this proves that still holds after
+                            # §2-§7 and that the nested command never actually runs.
+                            preCondition = "not(Invoke-Expression 'whoami')"
+                        }
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            Assert-MockCalled -CommandName Invoke-Expression -Exactly 0 -Scope It
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop2 -eq 'value2' } -Exactly 1 -Scope It
+        }
+
+        It "never invokes Start-Process when a condition tries to inject it via the call operator on a concatenated name" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource1"
+                            properties = @{ prop1 = "value1" }
+                            # String-concatenation indirection: structurally still a CommandAst
+                            # with no static name, so it is rejected outright (see the unit-test
+                            # comment for why this is a structural guarantee, not a heuristic).
+                            condition  = '& ("Start-"+"Process") notepad'
+                        }
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            Assert-MockCalled -CommandName Start-Process -Exactly 0 -Scope It
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop2 -eq 'value2' } -Exactly 1 -Scope It
+        }
+
+        It "rejects a variable-assignment exfiltration attempt in a preCondition without mutating the environment" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type         = "Module/Resource"
+                            name         = "Resource1"
+                            properties   = @{ prop1 = "value1" }
+                            preCondition = "`$env:DscPipelineRunnerInjectionCanary = 'evil'"
+                        }
+                    )
+                }
+            }
+
+            # Remove-Item is mocked in this Context's BeforeAll, so clear the canary directly
+            # through .NET rather than through the (mocked) cmdlet.
+            [System.Environment]::SetEnvironmentVariable('DscPipelineRunnerInjectionCanary', $null)
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            $env:DscPipelineRunnerInjectionCanary | Should -BeNullOrEmpty
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+        }
+
+        It "rejects a reflection-based method-call payload in a postCondition without ever calling the engine's Get" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type          = "Module/Resource"
+                            name          = "Resource1"
+                            properties    = @{ prop1 = "value1" }
+                            postCondition = "(result()).GetType().Assembly.GetType('System.Diagnostics.Process').Start('cmd')"
+                        }
+                    )
+                }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).ErrorMessage | Should -Match 'method call'
+        }
+
+        It "rejects stopProcessing() used in a preCondition (postCondition-only accessor boundary) and does not stop the run" {
+
+            # result()/stopProcessing() are scoped to postCondition only - Start-DscRunner's
+            # preCondition call site never passes -AllowStopProcessing (see Start-DscRunner.ps1).
+            # If that boundary were ever broken, stopProcessing() would actually run here, the
+            # run status would become 'StoppedByRequest', and Resource2 would be SKIPped instead
+            # of executed - so this test would fail loudly rather than merely not-cover the gap.
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type         = "Module/Resource"
+                            name         = "Resource1"
+                            properties   = @{ prop1 = "value1" }
+                            preCondition = 'stopProcessing()'
+                        }
+                        @{
+                            type       = "Module/Resource"
+                            name       = "Resource2"
+                            properties = @{ prop2 = "value2" }
+                        }
+                    )
+                }
+            }
+
+            . (Get-FunctionPath 'stopProcessing.ps1').FullName
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            $result.Status | Should -Be 'Completed'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop2 -eq 'value2' } -Exactly 1 -Scope It
+        }
+
+        It "rejects result() used in a condition (postCondition-only accessor boundary)" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type      = "Module/Resource"
+                            name      = "Resource1"
+                            properties = @{ prop1 = "value1" }
+                            condition = 'result().InDesiredState'
+                        }
+                    )
+                }
+            }
+
+            . (Get-FunctionPath 'result.ps1').FullName
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath
+
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter { $Method -eq 'Test' -and $Property.prop1 -eq 'value1' } -Exactly 0 -Scope It
+        }
+    }
+
+    Context "preExecutionScript (#57 §2)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+        }
+
+        It "runs preExecutionScript before the resource's Test evaluation" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{ ranPreExecutionScript = $false }
+                    resources  = @(
+                        @{
+                            type              = "Module/Resource"
+                            name              = "Resource1"
+                            properties        = @{ prop1 = "value1" }
+                            preExecutionScript = '$variables["ranPreExecutionScript"] = $true'
+                        }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                # By the time Test runs, preExecutionScript must already have run.
+                $variables['ranPreExecutionScript'] | Should -BeTrue
+                return @{ InDesiredState = $true; Message = 'Mocked message' }
+            }
+
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            $variables['ranPreExecutionScript'] | Should -BeTrue
+        }
+    }
+
+    Context "declarative resourceCredential (#57 §7)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+            $env:DscPipelineRunnerTestUser = 'svc-account'
+            $env:DscPipelineRunnerTestPass = 'super-secret'
+        }
+
+        AfterAll {
+            Remove-Item Env:\DscPipelineRunnerTestUser -ErrorAction SilentlyContinue
+            Remove-Item Env:\DscPipelineRunnerTestPass -ErrorAction SilentlyContinue
+        }
+
+        It "resolves resourceCredential via the Credential hook and injects it into the resource properties" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{
+                            type              = "Module/Resource"
+                            name              = "Resource1"
+                            properties        = @{ prop1 = "value1" }
+                            resourceCredential = @{
+                                action           = 'Environment'
+                                UserNameVariable = 'DscPipelineRunnerTestUser'
+                                PasswordVariable  = 'DscPipelineRunnerTestPass'
+                            }
+                        }
+                    )
+                }
+            }
+
+            Start-DscRunner -FilePath $script:testJsonPath | Out-Null
+
+            Assert-MockCalled -CommandName Invoke-DscResource -ParameterFilter {
+                $Method -eq 'Test' -and $Property.Credential -is [System.Management.Automation.PSCredential] -and $Property.Credential.UserName -eq 'svc-account'
+            } -Exactly 1 -Scope It
+        }
+    }
+
+    Context "reboot handling (#57 §3)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Content -MockWith { '{"parameters": {}, "variables": {}, "resources": []}' }
+        }
+
+        It "fails the resource and stops the run when a local Set reports RebootRequired (default policy)" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{ type = "Module/Resource"; name = "Resource1"; properties = @{ prop1 = "value1" } }
+                        @{ type = "Module/Resource"; name = "Resource2"; properties = @{ prop2 = "value2" } }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                if ($Method -eq 'Test') { return @{ InDesiredState = $false } }
+                if ($Method -eq 'Set')  { return @{ InDesiredState = $true; RebootRequired = $true } }
+                return @{ InDesiredState = $true }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath -Mode 'Set'
+
+            $result.Status | Should -Be 'StoppedByRequest'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'FAIL'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).RebootRequired | Should -BeTrue
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource2' }).Status | Should -Be 'SKIP'
+        }
+
+        It "continues without restarting when RunnerSettings.Reboot is 'Ignore'" {
+
+            Mock -CommandName ConvertFrom-Json -MockWith {
+                @{
+                    parameters = @{}
+                    variables  = @{}
+                    resources  = @(
+                        @{ type = "Module/Resource"; name = "Resource1"; properties = @{ prop1 = "value1" } }
+                    )
+                }
+            }
+
+            Mock -CommandName Invoke-DscResource -MockWith {
+                param ($Name, $ModuleName, $Method, $Property)
+                if ($Method -eq 'Test') { return @{ InDesiredState = $false } }
+                if ($Method -eq 'Set')  { return @{ InDesiredState = $true; RebootRequired = $true } }
+                return @{ InDesiredState = $true }
+            }
+
+            $result = Start-DscRunner -FilePath $script:testJsonPath -Mode 'Set' -RunnerSettings @{ Reboot = 'Ignore' }
+
+            $result.Status | Should -Be 'Completed'
+            ($result.Results | Where-Object { $_.InstanceName -eq 'Resource1' }).Status | Should -Be 'OK'
         }
     }
 

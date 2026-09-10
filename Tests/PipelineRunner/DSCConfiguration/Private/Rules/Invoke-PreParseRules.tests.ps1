@@ -58,4 +58,45 @@ Describe "Invoke-PreParseRules Function Tests" -Tag Unit, Runner, Configuration 
         Remove-Item -Path $rulePath -Force
     }
 
+    Context "-Settings forwarding (#57 §2)" {
+
+        BeforeAll {
+            Mock -CommandName Get-Module -MockWith { return @{ moduleBase = $TestDrive } }
+        }
+
+        It "forwards -Settings to a rule script that declares it" {
+            $settingsAwareRulePath = Join-Path $TestDrive '\Pipeline Rules\PreParse\SettingsAwareRule.ps1'
+            $null = New-Item -Path (Split-Path $settingsAwareRulePath) -ItemType Directory -Force
+            @'
+param(
+    [Object[]]$PipelineResources,
+    [hashtable]$Settings
+)
+if ($Settings.ContainsKey('Marker')) {
+    $Global:InvokePreParseRulesCapturedMarker = $Settings['Marker']
+}
+'@ | Set-Content -Path $settingsAwareRulePath
+
+            $Global:InvokePreParseRulesCapturedMarker = $null
+            Invoke-PreParseRules -Tasks @('Task1') -Settings @{ Marker = 'seen' }
+
+            $Global:InvokePreParseRulesCapturedMarker | Should -Be 'seen'
+            Remove-Item -Path $settingsAwareRulePath -Force
+            Remove-Variable -Name InvokePreParseRulesCapturedMarker -Scope Global -ErrorAction SilentlyContinue
+        }
+
+        It "does not pass -Settings to a rule script that only declares -PipelineResources (back-compat)" {
+            $legacyRulePath = Join-Path $TestDrive '\Pipeline Rules\PreParse\LegacyRule.ps1'
+            $null = New-Item -Path (Split-Path $legacyRulePath) -ItemType Directory -Force
+            @'
+param(
+    [Object[]]$PipelineResources
+)
+'@ | Set-Content -Path $legacyRulePath
+
+            { Invoke-PreParseRules -Tasks @('Task1') -Settings @{ Marker = 'seen' } } | Should -Not -Throw
+            Remove-Item -Path $legacyRulePath -Force
+        }
+    }
+
 }

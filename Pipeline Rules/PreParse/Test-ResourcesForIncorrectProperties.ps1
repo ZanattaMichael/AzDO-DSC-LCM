@@ -42,7 +42,11 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '',
     Justification = 'Intentional colored operator-facing pass/fail banner, not redirectable diagnostic output.')]
 param(
-    [Object[]]$PipelineResources
+    [Object[]]$PipelineResources,
+
+    # Resolved PipelineRunnerSettings, forwarded by Invoke-PreParseRules to every rule (#57 §2).
+    # Unused by this rule; accepted for signature compatibility.
+    [hashtable]$Settings
 )
 
 # Collect every validation error across all resources, then fail once at the end.

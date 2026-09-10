@@ -26,6 +26,15 @@ $resourceParameters = @{
     Property   = $Context.Property
 }
 
+# Remote-target execution (#57 §4): the Target action resolves a CimSession once per
+# file/resource and threads it through Invoke-EngineAction's Session context. DscV2/CIM
+# supports this natively - just add -CimSession, no other change to the call shape.
+# Local (the default; $Context.Session is $null) is unaffected.
+if ($null -ne $Context.Session -and $null -ne $Context.Session.CimSession) {
+    $resourceParameters.CimSession = $Context.Session.CimSession
+    Write-Verbose "[Actions/Engine/DscV2] Using remote CimSession for [$($Context.ModuleName)/$($Context.Name)]."
+}
+
 Write-Verbose "[Actions/Engine/DscV2] Invoke-DscResource '$($Context.Method)' for [$($Context.ModuleName)/$($Context.Name)]."
 $raw = Invoke-DscResource @resourceParameters
 

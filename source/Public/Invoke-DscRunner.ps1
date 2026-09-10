@@ -160,8 +160,13 @@ function Invoke-DscRunner {
         # and failing that the back-compat DSCResourceVersion major maps through Resolve-DscEngine
         # (2.x -> DscV2, 3.x -> DscV3, otherwise dsc.exe auto-detection). This keeps the version
         # gate out of the core loop while honouring the field configs already carry.
+        # Resolved once, regardless of -Engine, so its other keys (AllowExecutionScripts,
+        # Reboot, Target - #57 §2/§3/§4) are available to pass down to Start-DscRunner even
+        # when the engine itself was chosen explicitly. Only available pre-compile, here -
+        # Start-DscRunner receives compiled per-node YAML which does not carry this block.
+        $settings = Get-PipelineRunnerSetting -ConfigurationDirectory $configurationDirectory
+
         if (-not $EngineAction -and -not $PSBoundParameters.ContainsKey('Engine')) {
-            $settings = Get-PipelineRunnerSetting -ConfigurationDirectory $configurationDirectory
             if ($settings) {
                 if (-not [string]::IsNullOrWhiteSpace([string]$settings['Engine'])) {
                     $Engine = [string]$settings['Engine']
@@ -208,6 +213,7 @@ function Invoke-DscRunner {
         if ($ReportPath)    { $params.ReportPath    = $ReportPath }
         if ($EngineVersion) { $params.EngineVersion = $EngineVersion }
         if ($EngineAction)  { $params.EngineAction  = $EngineAction }
+        if ($settings)      { $params.RunnerSettings = $settings }
 
         # Collect each configuration's structured result so the run can be summarized as a single
         # machine-readable object and, with -FailOnError, surface a non-zero exit code (#19).

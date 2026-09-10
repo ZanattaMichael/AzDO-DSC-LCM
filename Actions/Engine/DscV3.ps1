@@ -21,6 +21,7 @@ A hashtable with keys: Method ('Test'|'Set'|'Get'), ModuleName, Name, Property.
 An object exposing InDesiredState, RebootRequired, Message and Raw (normalized by the
 runner into a [DscMethodResult]).
 #>
+[CmdletBinding()]
 param(
     [hashtable]$Context = @{}
 )
@@ -47,12 +48,90 @@ $verb = switch ($Context.Method) {
 
 $property = $Context.Property
 if ($null -eq $property) { $property = @{} }
+
+# DscV2/CIM marshals a [pscredential]-typed property natively (MSFT_Credential) over the
+# encrypted WinRM transport. JSON has no credential type, so DSC v3 needs the plaintext
+# resolved immediately before building --input (#57 §5) - this is the one place it is ever
+# revealed, and only into the JSON payload sent either to the local dsc.exe process or, when
+# $Context.Session is set, over the already-encrypted Invoke-Command -Session channel; it is
+# never written to disk via --file. A [pscredential] becomes {username, password}; a bare
+# [securestring] becomes its plaintext value. Both cases are still covered by the
+# Test-SensitivePropertyName redaction below, so the plaintext never reaches the log.
+function ConvertTo-DscV3CredentialSafeProperty {
+    param([hashtable]$InputHashTable, [System.Collections.Generic.HashSet[string]]$ForceRedactKeys)
+
+    $resolved = @{}
+    foreach ($key in $InputHashTable.Keys) {
+        $value = $InputHashTable[$key]
+        if ($value -is [System.Management.Automation.PSCredential]) {
+            $resolved[$key] = @{
+                username = $value.UserName
+                password = (Unprotect-SecureString -SecureString $value.Password)
+            }
+            $null = $ForceRedactKeys.Add($key)
+        }
+        elseif ($value -is [securestring]) {
+            $resolved[$key] = Unprotect-SecureString -SecureString $value
+            $null = $ForceRedactKeys.Add($key)
+        }
+        elseif ($value -is [hashtable]) {
+            $resolved[$key] = ConvertTo-DscV3CredentialSafeProperty -InputHashTable $value -ForceRedactKeys $ForceRedactKeys
+        }
+        else {
+            $resolved[$key] = $value
+        }
+    }
+    return $resolved
+}
+
+# Ground-truth secret keys (originally a [pscredential]/[securestring]) are force-redacted
+# in the log below regardless of whether their name happens to match the
+# Test-SensitivePropertyName heuristic (e.g. a property named 'SAPwd' would otherwise slip
+# through the name-substring check).
+$forceRedactKeys = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$property = ConvertTo-DscV3CredentialSafeProperty -InputHashTable $property -ForceRedactKeys $forceRedactKeys
 $inputJson = $property | ConvertTo-Json -Depth 32 -Compress
 
 $arguments = @('resource', $verb, '--resource', $resourceType, '--input', $inputJson)
 
-Write-Verbose "[Actions/Engine/DscV3] dsc $($arguments -join ' ')"
-$run = Invoke-DscExecutable -Arguments $arguments
+# Redact-for-logging only: the real --input JSON above is unredacted (dsc.exe needs the
+# actual secret), but the verbose breadcrumb must not echo it. Routes through the same
+# Test-SensitivePropertyName/Protect-SensitiveValue heuristic used elsewhere (#34), plus the
+# ground-truth $forceRedactKeys collected above, rather than logging $inputJson directly,
+# which used to leak every property value verbatim.
+function ConvertTo-RedactedPropertyTable {
+    param([hashtable]$InputHashTable, [System.Collections.Generic.HashSet[string]]$ForceRedactKeys)
+
+    $redacted = @{}
+    foreach ($key in $InputHashTable.Keys) {
+        $value = $InputHashTable[$key]
+        if ($ForceRedactKeys.Contains($key)) {
+            $redacted[$key] = '[REDACTED]'
+        }
+        elseif ($value -is [hashtable]) {
+            $redacted[$key] = ConvertTo-RedactedPropertyTable -InputHashTable $value -ForceRedactKeys $ForceRedactKeys
+        }
+        elseif (Test-SensitivePropertyName -Name $key) {
+            $redacted[$key] = '[REDACTED]'
+        }
+        else {
+            $redacted[$key] = $value
+        }
+    }
+    return $redacted
+}
+
+if ($VerbosePreference -ne 'SilentlyContinue') {
+    $redactedJson = (ConvertTo-RedactedPropertyTable -InputHashTable $property -ForceRedactKeys $forceRedactKeys) | ConvertTo-Json -Depth 32 -Compress
+    $redactedArguments = @('resource', $verb, '--resource', $resourceType, '--input', $redactedJson)
+    Write-Verbose "[Actions/Engine/DscV3] dsc $($redactedArguments -join ' ')"
+}
+$remoteSession = $null
+if ($null -ne $Context.Session -and $null -ne $Context.Session.PSSession) {
+    $remoteSession = $Context.Session.PSSession
+    Write-Verbose "[Actions/Engine/DscV3] Using remote PSSession for [$resourceType]."
+}
+$run = Invoke-DscExecutable -Arguments $arguments -Session $remoteSession
 
 if ($run.ExitCode -ne 0) {
     throw "[Actions/Engine/DscV3] 'dsc resource $verb' failed for [$resourceType] (exit $($run.ExitCode)): $($run.Output)"
@@ -89,9 +168,27 @@ elseif ($Context.Method -eq 'Set') {
     }
 }
 
+# Reboot-pending signal: dsc.exe's exact shape for this is not yet confirmed against a
+# real resource that sets it (#57 §3), so this reads tolerantly from either of the shapes
+# documented/observed for Microsoft.DSC-family resources rather than assuming one -
+# a top-level 'rebootRequired' boolean, or a nested 'metadata.Microsoft.DSC.rebootRequired'
+# (the dsc.exe metadata envelope some resources attach to their result). Absent either,
+# this defaults to $false, matching today's behavior for every resource that never signals it.
+$rebootRequired = $false
+if ($null -ne $parsed) {
+    if ($null -ne $parsed.PSObject.Properties['rebootRequired']) {
+        $rebootRequired = [bool]$parsed.rebootRequired
+    }
+    elseif ($parsed.PSObject.Properties['metadata'] -and
+            $parsed.metadata.PSObject.Properties['Microsoft.DSC'] -and
+            $parsed.metadata.'Microsoft.DSC'.PSObject.Properties['rebootRequired']) {
+        $rebootRequired = [bool]$parsed.metadata.'Microsoft.DSC'.rebootRequired
+    }
+}
+
 return [pscustomobject]@{
     InDesiredState = $inDesiredState
-    RebootRequired = $false
+    RebootRequired = $rebootRequired
     Message        = $message
     Raw            = $parsed
 }

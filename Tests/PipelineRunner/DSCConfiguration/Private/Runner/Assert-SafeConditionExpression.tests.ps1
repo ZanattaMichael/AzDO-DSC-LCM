@@ -1,6 +1,10 @@
 Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
 
     BeforeAll {
+        # Assert-SafeConditionExpression calls ConvertTo-NormalizedConditionExpression (#57 §2);
+        # dot-source it too since this test loads the function standalone rather than through the
+        # built module, where every Private function is dot-sourced together.
+        . (Get-FunctionPath 'ConvertTo-NormalizedConditionExpression.ps1').FullName
         . (Get-FunctionPath 'Assert-SafeConditionExpression.ps1').FullName
     }
 
@@ -21,6 +25,30 @@ Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
         It "allows logical operators and grouping" {
             { Assert-SafeConditionExpression -Expression '(1 -eq 1) -and ($x -ne 2)' } | Should -Not -Throw
         }
+
+        It "allows a bare parameters() call" {
+            { Assert-SafeConditionExpression -Expression "parameters('Environment')" } | Should -Not -Throw
+        }
+
+        It "allows a bare variables() call" {
+            { Assert-SafeConditionExpression -Expression "variables('ProjectWorkBoardsStatus')" } | Should -Not -Throw
+        }
+
+        It "allows a bare reference() call" {
+            { Assert-SafeConditionExpression -Expression "reference('Configuration Git Repository')" } | Should -Not -Throw
+        }
+
+        It "allows equals() combining parameters() and variables()" {
+            { Assert-SafeConditionExpression -Expression "equals(parameters('Environment'), variables('ProjectWorkBoardsStatus'))" } | Should -Not -Throw
+        }
+
+        It "allows not() wrapping equals()" {
+            { Assert-SafeConditionExpression -Expression "not(equals(variables('ProjectWorkBoardsStatus'), 'disabled'))" } | Should -Not -Throw
+        }
+
+        It "allows the whitelisted functions mixed with ordinary operators" {
+            { Assert-SafeConditionExpression -Expression "(parameters('Environment') -eq 'Prod') -and (variables('ProjectWorkBoardsStatus') -eq 'enabled')" } | Should -Not -Throw
+        }
     }
 
     Context "rejected side effects" {
@@ -32,6 +60,16 @@ Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
 
         It "rejects a command invocation nested in an expression" {
             { Assert-SafeConditionExpression -Expression '(Get-Item C:\).Name -eq ''x''' } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "rejects a non-whitelisted command nested inside an allowed function call" {
+            { Assert-SafeConditionExpression -Expression "equals(Get-Item C:\, 'x')" } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "rejects stopProcessing(), which is not on the condition allow-list" {
+            { Assert-SafeConditionExpression -Expression "parameters('X'); stopProcessing" } |
                 Should -Throw '*command invocation*'
         }
 
@@ -48,6 +86,223 @@ Describe "Assert-SafeConditionExpression Function Tests" -Tag Unit, Runner {
         It "rejects a syntactically invalid expression" {
             { Assert-SafeConditionExpression -Expression '$x -eq' } |
                 Should -Throw "*Invalid 'condition' expression*"
+        }
+    }
+
+    Context "-AllowStopProcessing (postCondition only, #57 §2)" {
+
+        It "still rejects stopProcessing() without the switch" {
+            { Assert-SafeConditionExpression -Expression 'stopProcessing()' } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "still rejects result() without the switch" {
+            { Assert-SafeConditionExpression -Expression 'result().InDesiredState' } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "allows stopProcessing() with the switch" {
+            { Assert-SafeConditionExpression -Expression 'stopProcessing()' -AllowStopProcessing } |
+                Should -Not -Throw
+        }
+
+        It "allows result() with the switch" {
+            { Assert-SafeConditionExpression -Expression 'result().InDesiredState' -AllowStopProcessing } |
+                Should -Not -Throw
+        }
+
+        It "still rejects an unrelated command even with the switch" {
+            { Assert-SafeConditionExpression -Expression 'Stop-TaskProcessing' -AllowStopProcessing } |
+                Should -Throw '*command invocation*'
+        }
+
+        It "still rejects a variable assignment even with the switch" {
+            { Assert-SafeConditionExpression -Expression '$x = 1' -AllowStopProcessing } |
+                Should -Throw '*variable assignment*'
+        }
+    }
+
+    # Regression coverage for issue #57's threat model: a condition/preCondition/postCondition
+    # string comes straight from a configuration file, so it must be treated as untrusted input.
+    # Every payload below was run against the current implementation (post §2-§7) before this
+    # test was written; none of them bypassed the allow-list. If any of these ever start
+    # passing (i.e. Assert-SafeConditionExpression stops throwing), that is a real vulnerability,
+    # not a broken test - do not relax the assertion, fix the guard.
+    Context "Security: injection attempts" -Tag Security {
+
+        Context "direct disallowed command invocation" {
+
+            It "rejects Remove-Item with destructive parameters" {
+                { Assert-SafeConditionExpression -Expression 'Remove-Item C:\ -Recurse -Force' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects Invoke-Expression on a variable" {
+                { Assert-SafeConditionExpression -Expression 'Invoke-Expression $x' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects the 'iex' alias of Invoke-Expression" {
+                # The allow-list check is purely syntactic (CommandAst.GetCommandName()), so it
+                # sees the literal text 'iex', not the cmdlet it resolves to - and 'iex' is not on
+                # the allow-list either, so it is rejected regardless.
+                { Assert-SafeConditionExpression -Expression "iex 'whoami'" } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects the call operator invoking a parenthesized command expression" {
+                # '& (Get-Process)' has no static command name (the name is itself an expression
+                # to be evaluated), so GetCommandName() returns an empty string; the guard's
+                # "-not (name -and allow-listed)" treats an empty/absent name as forbidden, and
+                # separately the nested Get-Process CommandAst is caught by the same walk.
+                { Assert-SafeConditionExpression -Expression '& (Get-Process)' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects a backtick-obfuscated command name" {
+                # PowerShell's tokenizer resolves the backtick escape before Assert-SafeConditionExpression
+                # ever sees a command name, so 'Rem`ove-Item' cannot be used to spell a name that
+                # slips past the allow-list under a different string than what actually executes.
+                { Assert-SafeConditionExpression -Expression 'Rem`ove-Item C:\' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects Start-Process" {
+                { Assert-SafeConditionExpression -Expression 'Start-Process notepad' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects New-Object instantiating a networking type" {
+                { Assert-SafeConditionExpression -Expression 'New-Object System.Net.WebClient' } |
+                    Should -Throw '*command invocation*'
+            }
+        }
+
+        Context "disallowed command nested inside an allowed call" {
+
+            # #57 §1 explicitly walks the whole AST (FindAll(..., $true)), not just the top
+            # level, so a disallowed command hidden as an argument to an allowed function-language
+            # accessor must still be caught. These are regression tests proving that still holds
+            # after the §2-§7 changes (postCondition accessors, lifecycle scripts, remote targets,
+            # credentials) layered on top of the same guard.
+            It "rejects Remove-Item nested inside equals()" {
+                { Assert-SafeConditionExpression -Expression "equals(Remove-Item C:\, 'x')" } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects a bare disallowed command name with no arguments nested inside equals()" {
+                # A bare 'Remove-Item' with no further arguments, used as one comma-separated
+                # argument to equals(...), does not even parse as a valid expression term (PowerShell
+                # requires an argument to be an expression, and a lone command name is not one in
+                # that position) - so this is rejected one step earlier, as a parse error rather
+                # than as a nested 'command invocation'. Both outcomes reject the payload before it
+                # can run; documenting the parse-error shape here so it is not mistaken for a gap.
+                { Assert-SafeConditionExpression -Expression "equals(Remove-Item, 'x')" } |
+                    Should -Throw "*Invalid 'condition' expression*"
+            }
+
+            It "rejects Invoke-Expression nested inside not()" {
+                { Assert-SafeConditionExpression -Expression "not(Invoke-Expression 'whoami')" } |
+                    Should -Throw '*command invocation*'
+            }
+        }
+
+        Context "variable assignment / exfiltration attempts" {
+
+            It "rejects an assignment into `$env:PATH" {
+                { Assert-SafeConditionExpression -Expression '$env:PATH = ''evil''' } |
+                    Should -Throw '*variable assignment*'
+            }
+
+            It "rejects an assignment into a global-scoped variable sourced from parameters()" {
+                { Assert-SafeConditionExpression -Expression "`${global:x} = (parameters('Y'))" } |
+                    Should -Throw '*variable assignment*'
+            }
+        }
+
+        Context "method-call injection" {
+
+            It "rejects a chained GetType()/Assembly/Process.Start() reflection payload" {
+                { Assert-SafeConditionExpression -Expression "(parameters('X')).GetType().Assembly.GetType('System.Diagnostics.Process').Start('cmd')" } |
+                    Should -Throw '*method call*'
+            }
+
+            It "rejects any InvokeMemberExpressionAst-shaped call on an allow-listed accessor's result" {
+                { Assert-SafeConditionExpression -Expression "(parameters('X')).Invoke()" } |
+                    Should -Throw '*method call*'
+            }
+        }
+
+        Context "string-based indirection attempting to smuggle a command past the allow-list" {
+
+            It "rejects the call operator invoking a concatenated command name" {
+                # '& ("Rem"+"ove-Item")' is structurally still a CommandAst whose name is an
+                # expression rather than a static string, so GetCommandName() returns empty and
+                # the guard rejects it outright - the AST does not even need to evaluate the
+                # concatenation to know this is not an allow-listed command. This proves the
+                # indirection technique is structurally caught, not merely untested.
+                { Assert-SafeConditionExpression -Expression '& ("Rem"+"ove-Item")' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects Invoke-Expression built from concatenated string parts" {
+                { Assert-SafeConditionExpression -Expression 'Invoke-Expression ("Rem"+"ove-Item C:\")' } |
+                    Should -Throw '*command invocation*'
+            }
+        }
+
+        Context "postCondition-only accessor scoping (privilege boundary, #57 §2)" {
+
+            # result()/stopProcessing() are deliberately scoped to postCondition only - a plain
+            # condition/preCondition must stay a side-effect-free predicate (#35) and must never be
+            # able to request that the run stop or read the engine's result. -AllowStopProcessing
+            # is the switch that lifts that restriction, and only Start-DscRunner's postCondition
+            # call site passes it (verified end-to-end in Start-DscRunner.tests.ps1).
+            It "rejects result() when used as an ordinary condition/preCondition (no switch)" {
+                { Assert-SafeConditionExpression -Expression 'result().InDesiredState' } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects stopProcessing() when used as an ordinary condition/preCondition (no switch)" {
+                { Assert-SafeConditionExpression -Expression 'stopProcessing()' } |
+                    Should -Throw '*command invocation*'
+            }
+        }
+
+        Context "postCondition injection variants (same allow-list applies, #57 §2)" {
+
+            # postCondition reuses Assert-SafeConditionExpression with -AllowStopProcessing; that
+            # switch only adds 'result'/'stopProcessing' to the allow-list, so every other
+            # injection vector above must still be rejected identically for postCondition.
+            It "rejects Remove-Item in a postCondition" {
+                { Assert-SafeConditionExpression -Expression 'Remove-Item C:\' -AllowStopProcessing } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects Invoke-Expression in a postCondition" {
+                { Assert-SafeConditionExpression -Expression 'Invoke-Expression $x' -AllowStopProcessing } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects a disallowed command nested inside equals() in a postCondition" {
+                { Assert-SafeConditionExpression -Expression "equals(Remove-Item C:\, 'x')" -AllowStopProcessing } |
+                    Should -Throw '*command invocation*'
+            }
+
+            It "rejects a variable assignment in a postCondition" {
+                { Assert-SafeConditionExpression -Expression '$env:PATH = ''evil''' -AllowStopProcessing } |
+                    Should -Throw '*variable assignment*'
+            }
+
+            It "rejects a reflection-based method-call payload built from result() in a postCondition" {
+                { Assert-SafeConditionExpression -Expression "(result()).GetType().Assembly.GetType('System.Diagnostics.Process').Start('cmd')" -AllowStopProcessing } |
+                    Should -Throw '*method call*'
+            }
+
+            It "rejects the call-operator string-concatenation indirection in a postCondition" {
+                { Assert-SafeConditionExpression -Expression '& ("Rem"+"ove-Item")' -AllowStopProcessing } |
+                    Should -Throw '*command invocation*'
+            }
         }
     }
 }

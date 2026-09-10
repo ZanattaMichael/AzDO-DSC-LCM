@@ -298,6 +298,44 @@ Engines load through the `Actions/` loader (§3A) but honor a strict typed contr
 This keeps the loop, rules, reporting, and connect/source actions identical across
 engines — only the selected `Actions/Engine/` file changes.
 
+### 5.1 DSC v3 configuration functions and whole-document apply (planned, not yet scheduled)
+
+Follow-on work, not yet assigned a phase number: DSC v3 configuration documents carry their own
+native function language (`[functionName(...)]`) that is distinct from the runner's own
+`$(parameters(...))`/`condition` function surface, and today a `[...]`-syntax value in a compiled
+configuration is silently passed through unevaluated to either engine. Evaluating it natively
+requires calling `dsc config get|test|set --file` (whole-document apply) rather than today's
+per-resource `dsc resource <verb>`, since only `dsc config` runs DSC v3's function resolver. See
+[`docs/dsc-v3-config-functions.md`](./dsc-v3-config-functions.md) for the detection/handling plan,
+the whole-document engine design and its trade-offs, and the research finding that a combined
+multi-resource apply has no DSC v2 equivalent under this project's "no LCM" architecture (§1, §6) —
+it stays resource-by-resource via `Invoke-DscResource`, while DSC v3 gains an additive
+whole-document engine alongside the existing per-resource one.
+
+### 5.2 Lifecycle scripting extensions and reboot handling (planned, not yet scheduled)
+
+A second follow-on, also not yet assigned a phase number: widening the runner's own function
+language (`parameters()`/`variables()`/`reference()`/`equals()`/`not()`) into `condition` (renamed
+`preCondition`, with a new `postCondition`) via a whitelist change to
+`Assert-SafeConditionExpression`, adding a symmetric `preExecutionScript`, and adding a
+narrowly-scoped `stopProcessing()` function usable only from `postCondition`. Alongside that, a
+plan for resources that report `RebootRequired` — today captured by the typed engine contract
+(§3B above) but discarded by `Start-DscRunner` and hardcoded `$false` by the `DscV3` engine — built
+around a checkpoint file and a `-ResumeFrom` parameter, since neither engine has a remote-target
+story today and a local reboot kills the runner's own process. See
+[`docs/lifecycle-scripting-and-reboot-handling.md`](./lifecycle-scripting-and-reboot-handling.md).
+
+### 5.3 Remote-target execution and credential handling (planned, not yet scheduled)
+
+A third follow-on, tracked as [issue #57](https://github.com/ZanattaMichael/Dsc.PipelineRunner/issues/57)
+§4/§5: a new `Target` action hook (`Local`/`WinRM`/`SSH`) giving both engines a remote-execution
+story for the first time, which is also the prerequisite for §5.2's remote reboot-wait plan
+(§3.4 of `docs/lifecycle-scripting-and-reboot-handling.md`). Paired with it, a new `Credential`
+action hook (`Environment`/`SecretManagement`/`Static`) so a target's connection credential and a
+DscV3 resource-property credential are *retrieved by the runner at the point they're needed*,
+by name, rather than a secret ever passing through the compiled Datum YAML on disk. See
+[`docs/remote-target-credential-handling.md`](./remote-target-credential-handling.md).
+
 ## 6. Eradicating "LCM"
 
 Every remaining live occurrence (verified by `grep -rniI LCM`) plus the intent:

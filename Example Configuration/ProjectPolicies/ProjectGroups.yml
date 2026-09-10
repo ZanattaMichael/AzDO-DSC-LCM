@@ -21,7 +21,19 @@ resources:
       GroupDescription: The following group provides members with read access to the project and codebase.
 
   - name: CON Board Administrators
-    condition: $ProjectWorkBoardsStatus -eq 'enabled'
+    # preCondition (issue #57 §2): the current key name; the bare 'condition' key above this
+    # comment used to be used here and still works as a deprecated alias (Start-DscRunner emits
+    # a one-line warning). Demonstrates the function-language accessors permitted inside a
+    # preCondition (an explicit allow-list, enforced by Assert-SafeConditionExpression):
+    # variables() reads a Datum-resolved variable (never throws - a missing key returns $null,
+    # unlike parameters()), and equals()/not() compose a pure, side-effect-free predicate. Note
+    # the argument style: PowerShell command syntax takes space-separated arguments, not
+    # comma-separated ones in parentheses - `equals (variables 'X') 'Y'`, not `equals(X, Y)`
+    # (the latter parses as a single two-element array argument and throws a parameter-binding
+    # error at evaluation time). Magenta never sets Project_Service_WorkBoards, so this stays
+    # $false for it (the group is skipped), exactly like the pre-rename 'condition' behaved -
+    # see docs/lifecycle-scripting-and-reboot-handling.md.
+    preCondition: equals (variables 'Project_Service_WorkBoards') 'enabled'
     type: AzureDevOpsDscNative/AzDoProjectGroup
     dependsOn: 
       - AzureDevOpsDscNative/AzDoProject/Project

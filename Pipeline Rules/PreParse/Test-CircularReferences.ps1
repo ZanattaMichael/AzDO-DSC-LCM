@@ -43,7 +43,11 @@ following properties:
 #>
 [CmdletBinding()]
 param(
-    [Object[]]$PipelineResources
+    [Object[]]$PipelineResources,
+
+    # Resolved PipelineRunnerSettings, forwarded by Invoke-PreParseRules to every rule (#57 §2).
+    # Unused by this rule; accepted for signature compatibility.
+    [hashtable]$Settings
 )
 
 if (-not $PipelineResources) {

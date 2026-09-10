@@ -8,11 +8,14 @@ Invoke-Action generalizes the pattern the module already uses for rules
 to a script file that lives under the module's `Actions/<Hook>/<Name>.ps1`, passing
 a single `-Context` hashtable, and returns whatever the action returns.
 
-Three hooks are supported:
+Five hooks are supported:
 
-- Source  — resolve a configuration source to a local directory (Local, Git, ...)
-- Connect — establish an auth/session before evaluation (None, AzureDevOps, ...)
-- Engine  — drive resource Test/Set/Get (DscV2, DscV3, ...)
+- Source     — resolve a configuration source to a local directory (Local, Git, ...)
+- Connect    — establish an auth/session before evaluation (None, AzureDevOps, ...)
+- Engine     — drive resource Test/Set/Get (DscV2, DscV3, ...)
+- Target     — resolve a remote-execution session before evaluation (Local, WinRM, SSH; #57 §4)
+- Credential — resolve a credentialRef name to a [PSCredential]/[SecureString] (Environment,
+               SecretManagement, Static; #57 §5/§6)
 
 A caller may instead pass an inline [scriptblock] via -ScriptBlock, which takes
 precedence over -Name and requires no file on disk — this is the "bring your own
@@ -43,7 +46,7 @@ function Invoke-Action {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('Source', 'Connect', 'Engine')]
+        [ValidateSet('Source', 'Connect', 'Engine', 'Target', 'Credential')]
         [string]$Hook,
 
         [string]$Name,
