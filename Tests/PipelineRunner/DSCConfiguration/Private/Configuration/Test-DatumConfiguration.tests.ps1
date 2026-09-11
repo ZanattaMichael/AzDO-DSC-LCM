@@ -55,6 +55,23 @@ Describe "Test-DatumConfiguration Function Tests" -Tag Unit, Runner, Configurati
             { Test-DatumConfiguration -Datum $datumConfig } | Should -Throw -ErrorId "*PipelineRunnerSettings*"
             Assert-MockCalled Write-Warning -Exactly 0
         }
+
+        It "should point at the rename when the configuration still uses the legacy LCMConfigSettings key" {
+            # Pre-rename (AZDO-DSC-LCM) configurations name the block 'LCMConfigSettings'. Report
+            # the rename rather than claiming a property is simply absent.
+            $datumConfig = @{
+                '__Definition' = @{
+                    LCMConfigSettings = @{
+                        ConfigurationVersion = "0.1"
+                        AZDOLCMVersion = "0.1"
+                        DSCResourceVersion = "2.0"
+                    }
+                }
+            }
+
+            { Test-DatumConfiguration -Datum $datumConfig } | Should -Throw -ErrorId "*LCMConfigSettings*PipelineRunnerSettings*"
+            Assert-MockCalled Write-Warning -Exactly 0
+        }
     }
 
     Context "When Versions are Invalid" {
